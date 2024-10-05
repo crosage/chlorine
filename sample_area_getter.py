@@ -4,7 +4,7 @@ import numpy as np
 
 def extract_polygon(
     shapefile_path: str = typer.Option(..., '-f', '--shapefile-path', help="Shapefile 文件的路径"),
-    output_path: str = typer.Option("polygon_points.npy", '-o', '--output-path', help="输出的 NumPy 文件路径")
+    output_path: str = typer.Option("polygon_points.py", '-o', '--output-path', help="输出的 NumPy 文件路径")
 ):
     gdf = gpd.read_file(shapefile_path)
 

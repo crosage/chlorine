@@ -15,12 +15,18 @@ def process_file(
             width = dataset.width
             height = dataset.height
 
+            # 提取影像的四角坐标
             left_most = transform[2]
             right_most = transform[2] + (width * transform[0])
             top_most = transform[5]
             bottom_most = transform[5] + (height * transform[4])
 
+            # 获取影像的 CRS 信息
+            crs = dataset.crs
+            crs_info = crs.to_string() if crs else "未定义 CRS"
+
         typer.echo(f"影像文件信息: {file_path}")
+        typer.echo(f"坐标参考系 (CRS): {crs_info}")
         typer.echo(f"Left-most X coordinate: {left_most}")
         typer.echo(f"Right-most X coordinate: {right_most}")
         typer.echo(f"Top-most Y coordinate: {top_most}")
@@ -44,8 +50,10 @@ def process_file(
         bottom_most = bounds[1]
         # 获取 CRS 信息
         crs = gdf.crs
+        crs_info = crs.to_string() if crs else "未定义 CRS"
+
+        # 获取坐标单位
         if crs:
-            # 使用 pyproj 获取单位信息
             try:
                 units = crs.axis_info[0].unit_name
             except AttributeError:
@@ -53,20 +61,13 @@ def process_file(
         else:
             units = "未定义 CRS"
         typer.echo(f"Shapefile 文件信息: {file_path}")
+        typer.echo(f"坐标参考系 (CRS): {crs_info}")
         typer.echo(f"坐标单位: {units}")
         typer.echo(f"最左侧位置: {left_most} {units}")
         typer.echo(f"最右侧位置: {right_most} {units}")
         typer.echo(f"最顶部 Y 坐标: {top_most} {units}")
         typer.echo(f"最底部 Y 坐标: {bottom_most} {units}")
 
-        if units == "degree":
-            transformer = Transformer.from_crs(crs, "EPSG:32650", always_xy=True)
-            gdf = gdf.to_crs("EPSG:32650")
-            output_file = file_path.replace(".shp", "_metre.shp")
-            gdf.to_file(output_file)
-            typer.echo(f"转换后的文件已保存为: {output_file}")
-        else:
-            typer.echo("坐标单位已经是米，无需转换。")
     else:
         typer.echo(f"不支持的文件类型: {file_extension}")
 
