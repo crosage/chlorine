@@ -27,10 +27,10 @@ def process_file(
 
         typer.echo(f"影像文件信息: {file_path}")
         typer.echo(f"坐标参考系 (CRS): {crs_info}")
-        typer.echo(f"Left-most X coordinate: {left_most}")
-        typer.echo(f"Right-most X coordinate: {right_most}")
-        typer.echo(f"Top-most Y coordinate: {top_most}")
-        typer.echo(f"Bottom-most Y coordinate: {bottom_most}")
+        typer.echo(f"最右侧 X 坐标: {left_most}")
+        typer.echo(f"最左侧 X 坐标: {right_most}")
+        typer.echo(f"最顶部 Y 坐标: {top_most}")
+        typer.echo(f"最底部 Y 坐标: {bottom_most}")
 
     elif file_extension.lower() in [".png", ".jpg", ".jpeg"]:
         Image.MAX_IMAGE_PIXELS = None
@@ -63,8 +63,8 @@ def process_file(
         typer.echo(f"Shapefile 文件信息: {file_path}")
         typer.echo(f"坐标参考系 (CRS): {crs_info}")
         typer.echo(f"坐标单位: {units}")
-        typer.echo(f"最左侧位置: {left_most} {units}")
-        typer.echo(f"最右侧位置: {right_most} {units}")
+        typer.echo(f"最左侧 X 坐标: {left_most} {units}")
+        typer.echo(f"最右侧 X 坐标: {right_most} {units}")
         typer.echo(f"最顶部 Y 坐标: {top_most} {units}")
         typer.echo(f"最底部 Y 坐标: {bottom_most} {units}")
 

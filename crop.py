@@ -7,7 +7,7 @@ from PIL import Image
 import typer
 import os
 
-def crop_within_sample_area(
+def shapefile_to_bw_label(
         img_path: str = typer.Option(..., '-i', '--img-path', help="输入影像的路径"),
         shapefile_path: str = typer.Option(..., '-s', '--shapefile-path', help="矢量数据的shapefile路径"),
         output_dir: str = typer.Option(..., '-o', '--output-dir', help="输出裁剪图像的文件夹路径"),
