@@ -3,11 +3,13 @@ import rasterio
 from rasterio.features import rasterize
 import geopandas as gpd
 import numpy as np
+import os
+
 
 def apply_mask(
-    img_path: str = typer.Option(..., '-i', '--img-path', help="输入影像的路径"),
-    shapefile_path: str = typer.Option(..., '-s', '--shapefile-path', help="Shapefile 文件的路径"),
-    output_path: str = typer.Option(..., '-o', '--output-path', help="输出图像的路径")
+        img_path: str = typer.Option(..., '-i', '--img-path', help="输入影像的路径"),
+        shapefile_folder: str = typer.Option(..., '-s', '--shapefile-folder', help="包含 Shapefile 的文件夹路径"),
+        output_path: str = typer.Option(..., '-o', '--output-path', help="输出图像的路径")
 ):
     with rasterio.open(img_path) as src:
         image = src.read()
@@ -17,12 +19,20 @@ def apply_mask(
         width = src.width
         height = src.height
 
-    gdf = gpd.read_file(shapefile_path)
+    gdf_list = []
+    for filename in os.listdir(shapefile_folder):
+        if filename.endswith('.shp'):
+            shapefile_path = os.path.join(shapefile_folder, filename)
+            gdf = gpd.read_file(shapefile_path)
 
-    if gdf.crs != crs:
-        gdf = gdf.to_crs(crs)
+            if gdf.crs != crs:
+                gdf = gdf.to_crs(crs)
 
-    geometries = [geom for geom in gdf.geometry]
+            gdf_list.append(gdf)
+
+    combined_gdf = gpd.pd.concat(gdf_list, ignore_index=True)
+
+    geometries = [geom for geom in combined_gdf.geometry]
 
     mask_shape = (int(height), int(width))
 
@@ -44,3 +54,7 @@ def apply_mask(
         dst.write(data_masked)
 
     typer.echo(f"图像处理完成，已保存为 '{output_path}'")
+
+
+if __name__ == "__main__":
+    typer.run(apply_mask)
