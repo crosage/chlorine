@@ -15,30 +15,44 @@ def process_file(
             width = dataset.width
             height = dataset.height
 
-            # 提取影像的四角坐标
+            num_bands = dataset.count
             left_most = transform[2]
             right_most = transform[2] + (width * transform[0])
             top_most = transform[5]
             bottom_most = transform[5] + (height * transform[4])
-
-            # 获取影像的 CRS 信息
+            data_types = dataset.dtypes
             crs = dataset.crs
             crs_info = crs.to_string() if crs else "未定义 CRS"
 
         typer.echo(f"影像文件信息: {file_path}")
         typer.echo(f"坐标参考系 (CRS): {crs_info}")
-        typer.echo(f"最右侧 X 坐标: {left_most}")
-        typer.echo(f"最左侧 X 坐标: {right_most}")
+        typer.echo(f"像素数据类型: {data_types}")
+        typer.echo(f"波段数量: {num_bands}")
+        typer.echo(f"最左侧 X 坐标: {left_most}")
+        typer.echo(f"最右侧 X 坐标: {right_most}")
         typer.echo(f"最顶部 Y 坐标: {top_most}")
         typer.echo(f"最底部 Y 坐标: {bottom_most}")
+
 
     elif file_extension.lower() in [".png", ".jpg", ".jpeg"]:
         Image.MAX_IMAGE_PIXELS = None
         image = Image.open(file_path)
         width, height = image.size
+        mode = image.mode
+
+        channels = {
+            '1': 1,
+            'L': 1,
+            'RGB': 3,
+            'RGBA': 4,
+            'CMYK': 4,
+            'P': 1,
+        }.get(mode, 'Unknown')
 
         typer.echo(f"图片文件信息: {file_path}")
         typer.echo(f"Width: {width}, Height: {height}")
+        typer.echo(f"Mode: {mode}, Channels: {channels}")
+
 
 
     elif file_extension.lower() == ".shp":

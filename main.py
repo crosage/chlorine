@@ -1,8 +1,10 @@
 import typer
 import os
+
+import convert_to_grey
 from convert_crs import convert_crs
+from convert_to_uint16 import convert_to_uint16
 from crop_xy import crop_file
-from image_intersection import image_intersection
 from crop import shapefile_to_bw_label
 from img2tif import convert_img_to_tiff
 from resizer import resize
@@ -10,6 +12,7 @@ from imggetter import process_file
 from sample_area_getter import extract_polygon
 from masker import apply_mask
 from auto_sample_area import create_concave_hull_polygon
+from set_fourth_channel import set_fourth_channel_to_one
 from split_image import split_images
 
 app = typer.Typer()
@@ -17,6 +20,8 @@ app = typer.Typer()
 os.environ['PROJ_LIB'] = r'D:\code\shpdealer\venv\Lib\site-packages\pyproj\proj_dir\share\proj'
 
 app.command(name="apply-mask", help="将感兴趣区域(AOI)外的图像部分置为0")(apply_mask)
+app.command(name="convert-to-uint16",help="将tiff图片转化为uint16位")(convert_to_uint16)
+app.command(name="convert-to-grey",help="将png转化为灰度图")(convert_to_grey.convert_to_grayscale)
 app.command(name="combine-polygons", help="将给定的Shapefile中的所有标注区域合并为一个大的样本区，并根据坐标限制范围")(create_concave_hull_polygon)
 app.command(name="convert-crs", help="切换参考系")(convert_crs)
 app.command(name="crop-by-coordinates", help="给出上下左右坐标进行裁剪")(crop_file)
@@ -26,6 +31,8 @@ app.command(name="img-to-tiff", help="将img图像转化为tif图像")(convert_i
 app.command(name="image-info", help="根据文件路径自动判断文件类型（影像、图片或 Shapefile）并获取基本信息")(process_file)
 app.command(name="resize-image", help="压缩图片大小")(resize)
 app.command(name="split-image", help="切割图片")(split_images)
+app.command(name="set-fourth-channel", help="设置第四个通道")(set_fourth_channel_to_one)
+
 
 if __name__ == "__main__":
     app()
