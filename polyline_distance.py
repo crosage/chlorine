@@ -387,18 +387,14 @@ def extract_subcurve(line, point1, point2, show=False):
     """
     try:
         # 计算点在折线上的距离
-        distance1 = line.project(point1)
-        distance2 = line.project(point2)
+        distance1 = line.line_locate_point(point1)
+        distance2 = line.line_locate_point(point2)
         print(f"Point1 在折线上的距离: {distance1}")
         print(f"Point2 在折线上的距离: {distance2}")
 
-        # 确保 distance1 <= distance2
-        start_distance = min(distance1, distance2)
-        end_distance = max(distance1, distance2)
-
         print("开始提取子曲线")
         # 使用 substring 提取子曲线
-        subcurve = substring(line, start_distance, end_distance)
+        subcurve = substring(line, distance1, distance2)
         print(f"提取的子曲线长度: {subcurve.length}")
 
         if show:
@@ -441,8 +437,103 @@ def extract_subcurve(line, point1, point2, show=False):
         print(f"提取子曲线时发生错误: {e}")
         return LineString()
 
-import matplotlib.pyplot as plt
 from shapely.geometry import LineString, Point, Polygon, MultiPoint
+
+
+def split_and_plot(work_polyline, point1, point2,point1_index,point2_index, log=True):
+    """
+    根据给定的两个点，将工作折线切割为两部分，并根据 `log` 参数判断是否展示调试信息。
+    :param work_polyline: 要切割的工作折线（LineString）
+    :param point1: 第一个切割点（Point）
+    :param point2: 第二个切割点（Point）
+    :param log: 是否绘制调试图形（True 或 False）
+    :return: 返回切割后的两部分（north_line 和 south_line）
+    """
+    # 找到切割点的坐标索引
+
+    coords = list(work_polyline.coords)
+    start_index =point1_index
+    end_index =point2_index
+    print(f"传入的坐标点{point1}  找到的索引{start_index} 索引点值{coords[start_index]}")
+    print(f"传入的坐标点{point2}  找到的索引{end_index} 索引点值{coords[end_index]}")
+    # 环形线段切割
+    if start_index < end_index:
+        north_coords = coords[start_index:end_index + 1]
+        south_coords = coords[end_index:] + coords[:start_index + 1]
+    else:
+        # 如果 start_index 大于 end_index，说明切割点跨越了环形线段的边界
+        print("进入下方")
+        north_coords = coords[start_index:] + coords[:end_index + 1]
+        # 这里我需要着重说一下为什么这么写，看起来，直接start_index:   + :end_index+1 那肯定的end_index+1:start_index即可解决问题对吧，实际上这个数据存在几条线之间互相重合的部分，所以需要用下面这种方法去掉上面已求出的真值部分才可以求出正确的部分，数据实在是惊为天人
+        south_coords = [coord for coord in coords if coord not in north_coords]
+
+    # 创建两段新的 LineString
+    north_line = LineString(north_coords)
+    south_line = LineString(south_coords)
+
+    if log:
+        # 如果 log 为 True，绘制调试图形
+        fig, ax = plt.subplots(figsize=(8, 8))
+
+        # # 绘制原始工作折线
+        # x, y = work_polyline.xy
+        # ax.plot(x, y, label="Work Polyline", color="blue", linewidth=2)
+
+        # # 绘制北岸部分
+        # x, y = north_line.xy
+        # ax.plot(x, y, label="North Line", color="green", linewidth=2)
+
+        # 绘制南岸部分
+        x, y = south_line.xy
+        ax.plot(x, y, label="South Line", color="orange", linewidth=2)
+        # # 1. 从 start_index 到末尾 (start_index:)
+        # if len(work_polyline.coords[start_index:]) > 0:
+        #     start_x, start_y = zip(*work_polyline.coords[start_index:])
+        #     ax.plot(start_x, start_y, label=f"From Start ({start_index}:)", color="purple", linestyle=":", linewidth=2)
+
+        # # 2. 从 end_index 到末尾 (end_index:)
+        # if len(work_polyline.coords[end_index:]) > 0:
+        #     end_x, end_y = zip(*work_polyline.coords[end_index:])
+        #     ax.plot(end_x, end_y, label=f"From End ({end_index}:)", color="cyan", linestyle=":", linewidth=2)
+
+        # 3. 从 end_index 到 start_index (end_index:start_index)
+        if len(work_polyline.coords[end_index:] + work_polyline.coords[:start_index]) > 0:
+            wrap_x, wrap_y = zip(*work_polyline.coords[end_index:] + work_polyline.coords[:start_index])
+            ax.plot(wrap_x, wrap_y, label=f"From End to Start ({end_index}:{start_index})", color="brown", linestyle=":", linewidth=2)
+
+        # # 4. 从 start_index 到 end_index (start_index:end_index)
+        # if len(work_polyline.coords[start_index:end_index]) > 0:
+        #     part_x, part_y = zip(*work_polyline.coords[start_index:end_index])
+        #     ax.plot(part_x, part_y, label=f"From Start to End ({start_index}:{end_index})", color="orange", linestyle=":", linewidth=2)
+        #
+        # # 5. 从开头到 end_index (:end_index)
+        # if len(work_polyline.coords[:end_index]) > 0:
+        #     head_x, head_y = zip(*work_polyline.coords[:end_index])
+        #     ax.plot(head_x, head_y, label=f"Up to End (:{end_index})", color="magenta", linestyle=":", linewidth=2)
+
+        # # 6. 从开头到 start_index (:start_index)
+        # if len(work_polyline.coords[:start_index]) > 0:
+        #     head_start_x, head_start_y = zip(*work_polyline.coords[:start_index])
+        #     ax.plot(head_start_x, head_start_y, label=f"Up to Start (:{start_index})", color="pink", linestyle=":", linewidth=2)
+
+        # 标记两个切割点
+        ax.scatter([point1.x, point2.x], [point1.y, point2.y], color="red", zorder=5, label="Cutting Points")
+
+        # 设置图形标题和标签
+        ax.set_title("Work Polyline and Split Lines")
+        ax.set_xlabel("X Coordinate")
+        ax.set_ylabel("Y Coordinate")
+        ax.legend()
+
+        # 设置坐标轴比例
+        ax.set_aspect("equal", adjustable="box")
+        plt.grid(True)
+        plt.show()
+
+    # 返回切割后的线段
+    return north_line, south_line
+
+
 
 def plot_closed_shapes_with_polylines(center_normals, work_polyline, original_line, save, log=False):
     """
@@ -455,11 +546,22 @@ def plot_closed_shapes_with_polylines(center_normals, work_polyline, original_li
     :return: 封闭形状列表。
     """
     closed_shapes = []
+    coords = list(work_polyline.coords)
 
-    # 如果需要绘图，创建图像和坐标轴
+    min_x_point = min(coords, key=lambda p: p[0])
+    min_y_point = min(coords, key=lambda p: p[1])
+    min_x_point = Point(min_x_point)
+    min_y_point = Point(min_y_point)
+    min_x_index = coords.index(min_x_point.coords[0])
+    min_y_index = coords.index(min_y_point.coords[0])
+    work_polyline = split_and_plot(work_polyline,min_x_point,min_y_point,min_x_index,min_y_index)
 
     for i in range(len(center_normals) - 1):
         print(f"当前正在遍历 {i}")
+        if i==0:
+            continue
+        if i!=866:
+            continue
         # 当前点与下一个点
         current_point = center_normals[i][0]
         next_point = center_normals[i + 1][0]
@@ -571,8 +673,6 @@ def plot_closed_shapes_with_polylines(center_normals, work_polyline, original_li
 
             if log:
                 print(f"已保存图像: {image_filename}")
-
-
 
     return closed_shapes
 
@@ -825,7 +925,7 @@ def main(use_smoothing=True):
         closed_shapes = load_closed_shapes_from_file(closed_shapes_file, is_yaml=True)
     else:
         print("No existing closed shapes file found. Generating closed shapes...")
-        closed_shapes = plot_closed_shapes_with_polylines(result, work_polylines[0].line,centerline.line, save="D:\\code\\shpdealer\\result2")
+        closed_shapes = plot_closed_shapes_with_polylines(result, work_polylines[0].line,centerline.line, save="D:\\code\\shpdealer\\result2",log=True)
         save_closed_shapes_to_file(closed_shapes, closed_shapes_file, file_format="yaml")
     # 开始绘制所有元素
     fig, ax = plt.subplots(figsize=(12, 12))
