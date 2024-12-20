@@ -1,3 +1,14 @@
+"""
+大体思路：
+1. 首先读取边界线和中心线
+2. 因为边界线之间存在重叠以及中间断点情况，需要首先合并成一整根边界线
+3. 然后给定两个点让边界线从这两个点断开成为南岸北岸，并进行保存
+4. 然后中心线进行平滑
+5. 中心线每隔一段点选取点然后从南岸北岸两岸伸出线取出的两个点分别保存为南岸点和北岸点
+
+"""
+
+
 import hashlib
 import os
 from math import dist
@@ -179,43 +190,6 @@ def load_polylines_from_shp(file_path, ignore):
                 polylines.append(polyline)
     return polylines
 
-def plot_polyline(polyline):
-    x_coords = [point.x for point in polyline.points]
-    y_coords = [point.y for point in polyline.points]
-    plt.plot(x_coords, y_coords, label=f'Polyline {polyline.id}')
-    plt.scatter(x_coords, y_coords, s=10)
-
-
-def plot_polylines_with_labels(polylines, show=True):
-    plt.figure(figsize=(12, 12))
-    min_x, min_y, max_x, max_y = None, None, None, None
-
-    for polyline in polylines:
-        x, y = polyline.line.xy
-        min_x = min(min(x), min_x) if min_x is not None else min(x)
-        max_x = max(max(x), max_x) if max_x is not None else max(x)
-        min_y = min(min(y), min_y) if min_y is not None else min(y)
-        max_y = max(max(y), max_y) if max_y is not None else max(y)
-
-    plt.xlim(min_x - 0.1 * (max_x - min_x), max_x + 0.1 * (max_x - min_x))
-    plt.ylim(min_y - 0.1 * (max_y - min_y), max_y + 0.1 * (max_y - min_y))
-
-    for polyline in polylines:
-        x, y = polyline.line.xy
-        color = (random.random(), random.random(), random.random())
-        plt.plot(x, y, color=color, label=f'Polyline {polyline.id}')
-        start_x, start_y = x[0], y[0]
-        plt.text(start_x, start_y, f"{polyline.id}", fontsize=10, color=color,
-                 ha='right', va='bottom', bbox=dict(facecolor='white', alpha=0.6, edgecolor='none'))
-
-    plt.xlabel("Longitude")
-    plt.ylabel("Latitude")
-    plt.title("Polylines with Labels")
-
-    if show:
-        plt.show()
-
-
 def find_closest_polyline(current_end, polylines):
     min_distance = float('inf')
     closest_polyline = None
@@ -322,57 +296,6 @@ def merge_polylines(polylines, show=True):
 
     merged_polyline = Polyline(id="merged", points=merged_points)
     return merged_polyline
-
-
-def plot_work(work_polylines, merged_line, show=True):
-    for i, polyline in enumerate(work_polylines):
-        if len(polyline.points) < 2:
-            continue
-
-        start_point = Point(polyline.points[0])
-        end_point = Point(polyline.points[-1])
-
-        proj_start = merged_line.line.project(start_point)
-        proj_end = merged_line.line.project(end_point)
-        proj_start_point = merged_line.line.interpolate(proj_start)
-        proj_end_point = merged_line.line.interpolate(proj_end)
-
-        print(f"第 {i + 1} 个 polyline 投影起点坐标: {proj_start_point}")
-        print(f"第 {i + 1} 个 polyline 投影终点坐标: {proj_end_point}")
-
-        if proj_start is None or proj_end is None or proj_start != proj_start or proj_end != proj_end:
-            print("警告：检测到无效的投影点。跳过该 polyline。")
-            continue
-
-        length1 = merged_line.length_between_points(start_point, end_point)
-        length2 = merged_line.length_between_points(proj_start_point, proj_end_point)
-        print(f"第 {i + 1} 个 polyline 的投影点之间的距离为: {length1:.2f} {length2:.2f}")
-        if(length1<0):
-            length1=length1*-1
-        if show:
-            plt.figure(figsize=(10, 6))
-            # print(f"projstart_point={proj_start_point.x}")
-            plt.text(proj_start_point.x,proj_start_point.y,f"length={length1}")
-            plt.plot(*merged_line.line.xy, label="Merged Line", color='black')
-            plt.plot(*polyline.line.xy, label="Polyline", color='green')
-            plt.scatter(*start_point.xy, color='red', label='start')
-            plt.scatter(*end_point.xy, color='blue', label='end')
-            plt.scatter(*proj_start_point.xy, color='orange', label='project_start')
-            plt.scatter(*proj_end_point.xy, color='purple', label='project_end')
-            plt.plot([start_point.x, proj_start_point.x], [start_point.y, proj_start_point.y], color='orange',
-                     linestyle='--')
-            plt.plot([end_point.x, proj_end_point.x], [end_point.y, proj_end_point.y], color='purple', linestyle='--')
-
-            all_x = [start_point.x, end_point.x, proj_start_point.x, proj_end_point.x]
-            all_y = [start_point.y, end_point.y, proj_start_point.y, proj_end_point.y]
-
-            plt.xlim(min(all_x) - 1000, max(all_x) + 1000)
-            plt.ylim(min(all_y) - 1000, max(all_y) + 1000)
-            plt.gca().set_aspect('equal', adjustable='box')
-            plt.title(f"number {i + 1}  Polyline project")
-            plt.legend()
-            plt.savefig(fname=f"{i+1}")
-            # plt.show()
 
 
 def extract_subcurve(line, point1, point2, show=False):
@@ -534,6 +457,42 @@ def split_and_plot(work_polyline, point1, point2,point1_index,point2_index, log=
     return north_line, south_line
 
 
+def save_lines_to_json(north_line, south_line, filename):
+    """
+    将北线和南线保存为 JSON 文件
+    :param north_line: 北线 LineString
+    :param south_line: 南线 LineString
+    :param filename: 保存的 JSON 文件路径
+    """
+    north_coords = list(north_line.coords)
+    south_coords = list(south_line.coords)
+
+    data = {
+        'north_line': north_coords,
+        'south_line': south_coords
+    }
+
+    with open(filename, 'w') as f:
+        json.dump(data, f, indent=4)
+
+    print(f"Lines saved to {filename}")
+
+def load_lines_from_json(filename):
+    """
+    从 JSON 文件加载并恢复北线和南线为 LineString 对象
+    :param filename: JSON 文件路径
+    :return: 恢复的北线和南线 LineString 对象
+    """
+    with open(filename, 'r') as f:
+        data = json.load(f)
+
+    north_coords = data['north_line']
+    south_coords = data['south_line']
+
+    north_line = LineString(north_coords)
+    south_line = LineString(south_coords)
+
+    return north_line, south_line
 
 def plot_closed_shapes_with_polylines(center_normals, work_polyline, original_line, save, log=False):
     """
@@ -898,6 +857,9 @@ def main(use_smoothing=True):
     boundary_file = "D:/机器学习数据/中心线和南北岸线/南北线_修改后.shp"
     work_polylines = load_polylines_from_shp(boundary_file, False)
     boundary_polygon = work_polylines[0].line.convex_hull
+
+
+
 
     # 是否进行平滑处理
     if use_smoothing:
