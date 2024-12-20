@@ -362,98 +362,100 @@ def extract_subcurve(line, point1, point2, show=False):
 
 from shapely.geometry import LineString, Point, Polygon, MultiPoint
 
+import matplotlib.pyplot as plt
+from shapely.geometry import LineString
 
-def split_and_plot(work_polyline, point1, point2,point1_index,point2_index, log=True):
+
+def split_and_plot(work_polyline, point1, point2, point1_index, point2_index, log=None):
     """
     根据给定的两个点，将工作折线切割为两部分，并根据 `log` 参数判断是否展示调试信息。
     :param work_polyline: 要切割的工作折线（LineString）
     :param point1: 第一个切割点（Point）
     :param point2: 第二个切割点（Point）
-    :param log: 是否绘制调试图形（True 或 False）
+    :param log: 包含数字的列表，指定要绘制的调试信息项
     :return: 返回切割后的两部分（north_line 和 south_line）
     """
     # 找到切割点的坐标索引
-
     coords = list(work_polyline.coords)
-    start_index =point1_index
-    end_index =point2_index
-    print(f"传入的坐标点{point1}  找到的索引{start_index} 索引点值{coords[start_index]}")
-    print(f"传入的坐标点{point2}  找到的索引{end_index} 索引点值{coords[end_index]}")
-    # 环形线段切割
+    start_index = point1_index
+    end_index = point2_index
     if start_index < end_index:
         north_coords = coords[start_index:end_index + 1]
         south_coords = coords[end_index:] + coords[:start_index + 1]
     else:
-        # 如果 start_index 大于 end_index，说明切割点跨越了环形线段的边界
-        print("进入下方")
         north_coords = coords[start_index:] + coords[:end_index + 1]
-        # 这里我需要着重说一下为什么这么写，看起来，直接start_index:   + :end_index+1 那肯定的end_index+1:start_index即可解决问题对吧，实际上这个数据存在几条线之间互相重合的部分，所以需要用下面这种方法去掉上面已求出的真值部分才可以求出正确的部分，数据实在是惊为天人
         south_coords = [coord for coord in coords if coord not in north_coords]
-
-    # 创建两段新的 LineString
     north_line = LineString(north_coords)
     south_line = LineString(south_coords)
 
     if log:
-        # 如果 log 为 True，绘制调试图形
         fig, ax = plt.subplots(figsize=(8, 8))
+        if 1 in log:
+            # 绘制原始工作折线
+            x, y = work_polyline.xy
+            ax.plot(x, y, label="Work Polyline", color="blue", linewidth=2)
 
-        # # 绘制原始工作折线
-        # x, y = work_polyline.xy
-        # ax.plot(x, y, label="Work Polyline", color="blue", linewidth=2)
+        if 2 in log:
+            # 绘制北岸部分
+            x, y = north_line.xy
+            ax.plot(x, y, label="North Line", color="green", linewidth=2)
 
-        # # 绘制北岸部分
-        # x, y = north_line.xy
-        # ax.plot(x, y, label="North Line", color="green", linewidth=2)
+        if 3 in log:
+            # 绘制南岸部分
+            x, y = south_line.xy
+            ax.plot(x, y, label="South Line", color="orange", linewidth=2)
 
-        # 绘制南岸部分
-        x, y = south_line.xy
-        ax.plot(x, y, label="South Line", color="orange", linewidth=2)
-        # # 1. 从 start_index 到末尾 (start_index:)
-        # if len(work_polyline.coords[start_index:]) > 0:
-        #     start_x, start_y = zip(*work_polyline.coords[start_index:])
-        #     ax.plot(start_x, start_y, label=f"From Start ({start_index}:)", color="purple", linestyle=":", linewidth=2)
+        if 4 in log:
+            # 从 start_index 到末尾 (start_index:)
+            if len(work_polyline.coords[start_index:]) > 0:
+                start_x, start_y = zip(*work_polyline.coords[start_index:])
+                ax.plot(start_x, start_y, label=f"From Start ({start_index}:)", color="purple", linestyle=":",
+                        linewidth=2)
 
-        # # 2. 从 end_index 到末尾 (end_index:)
-        # if len(work_polyline.coords[end_index:]) > 0:
-        #     end_x, end_y = zip(*work_polyline.coords[end_index:])
-        #     ax.plot(end_x, end_y, label=f"From End ({end_index}:)", color="cyan", linestyle=":", linewidth=2)
+        if 5 in log:
+            # 从 end_index 到末尾 (end_index:)
+            if len(work_polyline.coords[end_index:]) > 0:
+                end_x, end_y = zip(*work_polyline.coords[end_index:])
+                ax.plot(end_x, end_y, label=f"From End ({end_index}:)", color="cyan", linestyle=":", linewidth=2)
 
-        # 3. 从 end_index 到 start_index (end_index:start_index)
-        if len(work_polyline.coords[end_index:] + work_polyline.coords[:start_index]) > 0:
-            wrap_x, wrap_y = zip(*work_polyline.coords[end_index:] + work_polyline.coords[:start_index])
-            ax.plot(wrap_x, wrap_y, label=f"From End to Start ({end_index}:{start_index})", color="brown", linestyle=":", linewidth=2)
+        if 6 in log:
+            # 从 end_index 到 start_index (end_index:start_index)
+            if len(work_polyline.coords[end_index:] + work_polyline.coords[:start_index]) > 0:
+                wrap_x, wrap_y = zip(*work_polyline.coords[end_index:] + work_polyline.coords[:start_index])
+                ax.plot(wrap_x, wrap_y, label=f"From End to Start ({end_index}:{start_index})", color="brown",
+                        linestyle=":", linewidth=2)
 
-        # # 4. 从 start_index 到 end_index (start_index:end_index)
-        # if len(work_polyline.coords[start_index:end_index]) > 0:
-        #     part_x, part_y = zip(*work_polyline.coords[start_index:end_index])
-        #     ax.plot(part_x, part_y, label=f"From Start to End ({start_index}:{end_index})", color="orange", linestyle=":", linewidth=2)
-        #
-        # # 5. 从开头到 end_index (:end_index)
-        # if len(work_polyline.coords[:end_index]) > 0:
-        #     head_x, head_y = zip(*work_polyline.coords[:end_index])
-        #     ax.plot(head_x, head_y, label=f"Up to End (:{end_index})", color="magenta", linestyle=":", linewidth=2)
+        if 7 in log:
+            # 从 start_index 到 end_index (start_index:end_index)
+            if len(work_polyline.coords[start_index:end_index]) > 0:
+                part_x, part_y = zip(*work_polyline.coords[start_index:end_index])
+                ax.plot(part_x, part_y, label=f"From Start to End ({start_index}:{end_index})", color="orange",
+                        linestyle=":", linewidth=2)
 
-        # # 6. 从开头到 start_index (:start_index)
-        # if len(work_polyline.coords[:start_index]) > 0:
-        #     head_start_x, head_start_y = zip(*work_polyline.coords[:start_index])
-        #     ax.plot(head_start_x, head_start_y, label=f"Up to Start (:{start_index})", color="pink", linestyle=":", linewidth=2)
+        if 8 in log:
+            # 从开头到 end_index (:end_index)
+            if len(work_polyline.coords[:end_index]) > 0:
+                head_x, head_y = zip(*work_polyline.coords[:end_index])
+                ax.plot(head_x, head_y, label=f"Up to End (:{end_index})", color="magenta", linestyle=":", linewidth=2)
 
-        # 标记两个切割点
+        if 9 in log:
+            # 从开头到 start_index (:start_index)
+            if len(work_polyline.coords[:start_index]) > 0:
+                head_start_x, head_start_y = zip(*work_polyline.coords[:start_index])
+                ax.plot(head_start_x, head_start_y, label=f"Up to Start (:{start_index})", color="pink", linestyle=":",
+                        linewidth=2)
+
         ax.scatter([point1.x, point2.x], [point1.y, point2.y], color="red", zorder=5, label="Cutting Points")
 
-        # 设置图形标题和标签
         ax.set_title("Work Polyline and Split Lines")
         ax.set_xlabel("X Coordinate")
         ax.set_ylabel("Y Coordinate")
         ax.legend()
 
-        # 设置坐标轴比例
         ax.set_aspect("equal", adjustable="box")
         plt.grid(True)
         plt.show()
 
-    # 返回切割后的线段
     return north_line, south_line
 
 
