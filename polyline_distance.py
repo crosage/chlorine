@@ -384,6 +384,7 @@ def split_and_plot(work_polyline, point1, point2, point1_index, point2_index, lo
         south_coords = coords[end_index:] + coords[:start_index + 1]
     else:
         north_coords = coords[start_index:] + coords[:end_index + 1]
+        # 这里我需要着重说一下为什么这么写，看起来，直接start_index:   + :end_index+1 那肯定的end_index+1:start_index即可解决问题对吧，实际上这个数据存在几条线之间互相重合的部分，所以需要用下面这种方法去掉上面已求出的真值部分才可以求出正确的部分，数据实在是惊为天人
         south_coords = [coord for coord in coords if coord not in north_coords]
     north_line = LineString(north_coords)
     south_line = LineString(south_coords)
