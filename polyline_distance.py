@@ -366,7 +366,7 @@ import matplotlib.pyplot as plt
 from shapely.geometry import LineString
 
 
-def split_and_plot(work_polyline, point1, point2, point1_index, point2_index, log=None):
+def split_polyline_by_points(work_polyline, point1, point2, point1_index, point2_index, log=None):
     """
     根据给定的两个点，将工作折线切割为两部分，并根据 `log` 参数判断是否展示调试信息。
     :param work_polyline: 要切割的工作折线（LineString）
@@ -460,7 +460,7 @@ def split_and_plot(work_polyline, point1, point2, point1_index, point2_index, lo
     return north_line, south_line
 
 
-def save_lines_to_json(north_line, south_line, filename):
+def save_north_south_lines_to_json(north_line, south_line, filename):
     """
     将北线和南线保存为 JSON 文件
     :param north_line: 北线 LineString
@@ -480,7 +480,7 @@ def save_lines_to_json(north_line, south_line, filename):
 
     print(f"Lines saved to {filename}")
 
-def load_lines_from_json(filename):
+def load_north_south_lines_from_json(filename):
     """
     从 JSON 文件加载并恢复北线和南线为 LineString 对象
     :param filename: JSON 文件路径
@@ -497,6 +497,34 @@ def load_lines_from_json(filename):
 
     return north_line, south_line
 
+
+def plot_north_south_lines(north_line, south_line):
+    """
+    可视化北线和南线
+    :param north_line: 北线 LineString
+    :param south_line: 南线 LineString
+    """
+    fig, ax = plt.subplots(figsize=(10, 8))
+
+    # 绘制北线
+    x, y = north_line.xy
+    ax.plot(x, y, label='North Line', linewidth=2)
+
+    # 绘制南线
+    x, y = south_line.xy
+    ax.plot(x, y, label='South Line', linewidth=2)
+
+    # 标题和图例
+    ax.set_title('Visualization of North and South Lines')
+    ax.set_xlabel('X Coordinate')
+    ax.set_ylabel('Y Coordinate')
+    ax.legend()
+
+    # 网格和比例
+    ax.grid(True)
+    ax.set_aspect('equal', adjustable='box')
+
+    plt.show()
 def plot_closed_shapes_with_polylines(center_normals, work_polyline, original_line, save, log=False):
     """
     给定中心点、原始中心线和工作折线，求出每个封闭的区域。
@@ -516,7 +544,7 @@ def plot_closed_shapes_with_polylines(center_normals, work_polyline, original_li
     min_y_point = Point(min_y_point)
     min_x_index = coords.index(min_x_point.coords[0])
     min_y_index = coords.index(min_y_point.coords[0])
-    work_polyline = split_and_plot(work_polyline,min_x_point,min_y_point,min_x_index,min_y_index)
+    work_polyline = split_polyline_by_points(work_polyline,min_x_point,min_y_point,min_x_index,min_y_index)
 
     for i in range(len(center_normals) - 1):
         print(f"当前正在遍历 {i}")
@@ -861,82 +889,100 @@ def main(use_smoothing=True):
     work_polylines = load_polylines_from_shp(boundary_file, False)
     boundary_polygon = work_polylines[0].line.convex_hull
 
+    north_south_file= "split_points.yaml"
 
+    if os.path.exists(north_south_file):
+        print(f"Found existing closed shapes file: {north_south_file}. Loading closed shapes...")
+        north_line,south_line=load_north_south_lines_from_json(north_south_file)
 
+    else :
+        work_polyline=work_polylines[0].line
+        coords = list(work_polyline.coords)
+        min_x_point = min(coords, key=lambda p: p[0])
+        min_y_point = min(coords, key=lambda p: p[1])
+        min_x_point = Point(min_x_point)
+        min_y_point = Point(min_y_point)
+        min_x_index = coords.index(min_x_point.coords[0])
+        min_y_index = coords.index(min_y_point.coords[0])
 
-    # 是否进行平滑处理
-    if use_smoothing:
-        print("Using smoothed centerline...")
-        centerline = merged_line.smooth_with_boundary(boundary=boundary_polygon, interval=1000, new_id="smoothed_centerline")
-    else:
-        print("Using original centerline...")
-        centerline = merged_line
-
-    # 分割点结果文件
-    split_points_file = "split_points.yaml"
-    if os.path.exists(split_points_file):
-        print(f"Found existing split points file: {split_points_file}. Loading split points...")
-        result = load_split_points_from_file(split_points_file, is_yaml=True)
-    else:
-        print("No existing split points file found. Running calculations...")
-        result = generate_infinite_normals_on_linestring_with_polyline(centerline.line, work_polylines[0].line, interval=1000)
-        save_split_points_to_file(result, split_points_file, file_format="yaml")
-        print(f"Split points saved to {split_points_file}")
-
-    # Closed Shapes 结果文件
-    closed_shapes_file = "closed_shapes.yaml"
-    if os.path.exists(closed_shapes_file):
-        print(f"Found existing closed shapes file: {closed_shapes_file}. Loading closed shapes...")
-        closed_shapes = load_closed_shapes_from_file(closed_shapes_file, is_yaml=True)
-    else:
-        print("No existing closed shapes file found. Generating closed shapes...")
-        closed_shapes = plot_closed_shapes_with_polylines(result, work_polylines[0].line,centerline.line, save="D:\\code\\shpdealer\\result2",log=True)
-        save_closed_shapes_to_file(closed_shapes, closed_shapes_file, file_format="yaml")
-    # 开始绘制所有元素
-    fig, ax = plt.subplots(figsize=(12, 12))
-
-    print("绘制边界线")
-    # 绘制边界线
-    for i, boundary in enumerate(work_polylines):
-        bx, by = boundary.line.xy
-        ax.plot(bx, by, color="green", label="Boundary Line" if i == 0 else "", linestyle="--")
-
-    print("中心线")
-    # 绘制原始中心线（仅当平滑启用时）
-    if use_smoothing:
-        ox, oy = merged_line.line.xy  # 原始中心线
-        ax.plot(ox, oy, color="gray", linewidth=1, linestyle="--", label="Original Centerline")
-
-    # 绘制平滑后的中心线或原始中心线
-    cx, cy = centerline.line.xy
-    if use_smoothing:
-        ax.plot(cx, cy, color="blue", linewidth=2, label="Smoothed Centerline")
-    else:
-        ax.plot(cx, cy, color="blue", linewidth=2, label="Original Centerline")
-
-    # 绘制分割点及法线
-    for point, normal_line in result:
-        ax.scatter(point.x, point.y, color="red", s=10, label="Split Points" if "Split Points" not in ax.get_legend_handles_labels()[1] else "")
-        nx, ny = normal_line.xy
-        ax.plot(nx, ny, color="orange", linestyle=":", linewidth=0.5, label="Normal Line" if "Normal Line" not in ax.get_legend_handles_labels()[1] else "")
-
-    print("绘制闭合形状")
-    # 绘制闭合形状
-    for i, shape in enumerate(closed_shapes):
-        print(f"绘制{i}")
-        px, py = shape.polygon.exterior.xy
-        color = (random.random(), random.random(), random.random())
-        ax.plot(px, py, color=color, label=f"Closed Shape {i}" if i == 0 else "")
-        ax.fill(px, py, color=color, alpha=0.2)
-
-    # 设置图例、标题与样式
-    ax.legend()
-    ax.set_title("Centerline, Boundary, Split Points, and Closed Shapes")
-    ax.set_aspect("equal", adjustable="box")
-    plt.xlabel("X Coordinate")
-    plt.ylabel("Y Coordinate")
-    plt.grid(True)
-    plt.show()
+        north_line,south_line = split_polyline_by_points(work_polyline,min_x_point,min_y_point,min_x_index,min_y_index)
+        save_north_south_lines_to_json(north_line, south_line, "north_south_line.json")
+        plot_north_south_lines(north_line,south_line)
+    #
+    #
+    # # 是否进行平滑处理
+    # if use_smoothing:
+    #     print("Using smoothed centerline...")
+    #     centerline = merged_line.smooth_with_boundary(boundary=boundary_polygon, interval=1000, new_id="smoothed_centerline")
+    # else:
+    #     print("Using original centerline...")
+    #     centerline = merged_line
+    #
+    # # 分割点结果文件
+    # split_points_file = "split_points.yaml"
+    # if os.path.exists(split_points_file):
+    #     print(f"Found existing split points file: {split_points_file}. Loading split points...")
+    #     result = load_split_points_from_file(split_points_file, is_yaml=True)
+    # else:
+    #     print("No existing split points file found. Running calculations...")
+    #     result = generate_infinite_normals_on_linestring_with_polyline(centerline.line, work_polylines[0].line, interval=1000)
+    #     save_split_points_to_file(result, split_points_file, file_format="yaml")
+    #     print(f"Split points saved to {split_points_file}")
+    #
+    # # Closed Shapes 结果文件
+    # closed_shapes_file = "closed_shapes.yaml"
+    # if os.path.exists(closed_shapes_file):
+    #     print(f"Found existing closed shapes file: {closed_shapes_file}. Loading closed shapes...")
+    #     closed_shapes = load_closed_shapes_from_file(closed_shapes_file, is_yaml=True)
+    # else:
+    #     print("No existing closed shapes file found. Generating closed shapes...")
+    #     closed_shapes = plot_closed_shapes_with_polylines(result, work_polylines[0].line,centerline.line, save="D:\\code\\shpdealer\\result2",log=True)
+    #     save_closed_shapes_to_file(closed_shapes, closed_shapes_file, file_format="yaml")
+    # # 开始绘制所有元素
+    # fig, ax = plt.subplots(figsize=(12, 12))
+    #
+    # print("绘制边界线")
+    # # 绘制边界线
+    # for i, boundary in enumerate(work_polylines):
+    #     bx, by = boundary.line.xy
+    #     ax.plot(bx, by, color="green", label="Boundary Line" if i == 0 else "", linestyle="--")
+    #
+    # print("中心线")
+    # # 绘制原始中心线（仅当平滑启用时）
+    # if use_smoothing:
+    #     ox, oy = merged_line.line.xy  # 原始中心线
+    #     ax.plot(ox, oy, color="gray", linewidth=1, linestyle="--", label="Original Centerline")
+    #
+    # # 绘制平滑后的中心线或原始中心线
+    # cx, cy = centerline.line.xy
+    # if use_smoothing:
+    #     ax.plot(cx, cy, color="blue", linewidth=2, label="Smoothed Centerline")
+    # else:
+    #     ax.plot(cx, cy, color="blue", linewidth=2, label="Original Centerline")
+    #
+    # # 绘制分割点及法线
+    # for point, normal_line in result:
+    #     ax.scatter(point.x, point.y, color="red", s=10, label="Split Points" if "Split Points" not in ax.get_legend_handles_labels()[1] else "")
+    #     nx, ny = normal_line.xy
+    #     ax.plot(nx, ny, color="orange", linestyle=":", linewidth=0.5, label="Normal Line" if "Normal Line" not in ax.get_legend_handles_labels()[1] else "")
+    #
+    # print("绘制闭合形状")
+    # # 绘制闭合形状
+    # for i, shape in enumerate(closed_shapes):
+    #     print(f"绘制{i}")
+    #     px, py = shape.polygon.exterior.xy
+    #     color = (random.random(), random.random(), random.random())
+    #     ax.plot(px, py, color=color, label=f"Closed Shape {i}" if i == 0 else "")
+    #     ax.fill(px, py, color=color, alpha=0.2)
+    #
+    # # 设置图例、标题与样式
+    # ax.legend()
+    # ax.set_title("Centerline, Boundary, Split Points, and Closed Shapes")
+    # ax.set_aspect("equal", adjustable="box")
+    # plt.xlabel("X Coordinate")
+    # plt.ylabel("Y Coordinate")
+    # plt.grid(True)
+    # plt.show()
 
 
 if __name__ == "__main__":
