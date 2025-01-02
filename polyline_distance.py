@@ -16,10 +16,12 @@ import numpy as np
 import geopandas as gpd
 import json
 import yaml
-from matplotlib import pyplot as plt
 from shapely.geometry import Polygon,Point, LineString,MultiLineString,MultiPoint
 from shapely.ops import nearest_points, linemerge, substring
 import random
+import matplotlib.pyplot as plt
+from shapely.geometry import LineString
+
 # line.interpolate用于找一条线上指定距离的点
 class Polyline:
     def __init__(self, id, points):
@@ -108,62 +110,116 @@ class ClosedShape:
         return f"ClosedShape(intersections={self.intersections})"
 
 
-def generate_infinite_normals_on_linestring_with_polyline(line, work_polyline, interval=100):
+def generate_infinite_normals_on_linestring_with_polyline(line, north, south, interval=100):
+    """
+    生成多段线上的法线，使用 north 和 south 作为参考线来计算法线方向。
+
+    :param line: 多段线 (LineString)。
+    :param north: 北岸参考线 (LineString)，用于确定法线的方向。
+    :param south: 南岸参考线 (LineString)，用于确定法线的方向。
+    :param interval: 间隔距离（米），用于在多段线的每个点之间生成法线。
+    :return: 返回包含法线的点与法线的元组列表。
+    """
     line_length = line.length
-    points_with_normals = []
+    points_with_normals = []  # 用于存储每个点和对应的法线
 
     for distance in range(0, int(line_length) + 1, interval):
-        print(f"目前distance:{distance} ")
-        point = line.interpolate(distance)
+        try:
+            point = line.interpolate(distance)
 
-        if distance == 0:
-            next_point = line.interpolate(distance + 1)
-            tangent_vector = np.array([next_point.x - point.x, next_point.y - point.y])
-        elif distance >= line_length:
-            prev_point = line.interpolate(distance - 1)
-            tangent_vector = np.array([point.x - prev_point.x, point.y - prev_point.y])
-        else:
-            prev_point = line.interpolate(distance - 1)
-            next_point = line.interpolate(distance + 1)
-            tangent_vector = np.array([next_point.x - prev_point.x, next_point.y - prev_point.y])
+            # 计算切线方向
+            if distance == 0:
+                next_point = line.interpolate(distance + 1)
+                tangent_vector = np.array([next_point.x - point.x, next_point.y - point.y])
+            elif distance >= line_length:
+                prev_point = line.interpolate(distance - 1)
+                tangent_vector = np.array([point.x - prev_point.x, point.y - prev_point.y])
+            else:
+                prev_point = line.interpolate(distance - 1)
+                next_point = line.interpolate(distance + 1)
+                tangent_vector = np.array([next_point.x - prev_point.x, next_point.y - prev_point.y])
 
-        normal_vector = np.array([-tangent_vector[1], tangent_vector[0]])
-        normal_vector = normal_vector / np.linalg.norm(normal_vector)
+            # 计算法线方向，垂直于切线
+            normal_vector = np.array([-tangent_vector[1], tangent_vector[0]])
+            normal_vector = normal_vector / np.linalg.norm(normal_vector)  # 单位化法线
 
-        offset_start = np.array([point.x, point.y]) - (normal_vector * 1e6)
-        offset_end = np.array([point.x, point.y]) + (normal_vector * 1e6)
-        infinite_normal_line = LineString([offset_start, offset_end])
+            # 使用 north 和 south 线确定法线的最终方向
+            if north.contains(point):  # 如果点在 north 线的北边
+                normal_vector = -normal_vector  # 反转法线方向
 
-        intersection = work_polyline.intersection(infinite_normal_line)
+            # 生成无限法线
+            offset_start = np.array([point.x, point.y]) - (normal_vector * 1e6)
+            offset_end = np.array([point.x, point.y]) + (normal_vector * 1e6)
+            infinite_normal_line = LineString([offset_start, offset_end])
 
-        if intersection.is_empty or not hasattr(intersection, "geoms") or len(intersection.geoms) < 2:
+            # 计算法线与 north 和 south 的交点
+            intersection_with_north = infinite_normal_line.intersection(north)
+            intersection_with_south = infinite_normal_line.intersection(south)
+
+            if intersection_with_north.is_empty and intersection_with_south.is_empty:
+                continue
+
+            print(f"当前距离: {distance} ")
+            north_points = []
+            if not intersection_with_north.is_empty:
+                if intersection_with_north.geom_type == 'MultiPoint':
+                    north_points.extend(intersection_with_north.geoms)
+                else:
+                    north_points.append(intersection_with_north)
+
+            south_points = []
+            if not intersection_with_south.is_empty:
+                if intersection_with_south.geom_type == 'MultiPoint':
+                    south_points.extend(intersection_with_south.geoms)
+                else:
+                    south_points.append(intersection_with_south)
+            print(north_points, south_points)
+
+            north_point = min(north_points, key=lambda p: p.distance(point)) if north_points else None
+            south_point = min(south_points, key=lambda p: p.distance(point)) if south_points else None
+
+            if north_point and south_point:
+                normal_line = LineString([north_point, south_point])
+                points_with_normals.append((point, normal_line))
+            else:
+                continue
+
+        except Exception as e:
+            print(f"在距离 {distance} 处发生异常: {e}")
             continue
-
-        sorted_points = sorted(intersection.geoms, key=lambda p: p.distance(point))
-        normal_line = LineString(sorted_points[:2])
-        points_with_normals.append((point, normal_line))
 
     print(f"初步生成的法线数量: {len(points_with_normals)}")
 
     def remove_crossing_normals(points_with_normals):
+        """
+        去除相交的法线，只保留不交叉的法线。
+        """
         while True:
-            crossings = {}
-            for i, (_, line1) in enumerate(points_with_normals):
-                crossings[i] = 0
-                for j, (_, line2) in enumerate(points_with_normals):
-                    if i != j and line1.intersects(line2):
-                        crossings[i] += 1
+            try:
+                crossings = {}  # 用于记录每个法线交叉的次数
+                for i, (_, line1) in enumerate(points_with_normals):
+                    crossings[i] = 0
+                    for j, (_, line2) in enumerate(points_with_normals):
+                        if i != j and line1.intersects(line2):
+                            crossings[i] += 1
 
-            max_cross_index = max(crossings, key=crossings.get)
-            max_cross_count = crossings[max_cross_index]
-            print(f"当前交点最多的法线索引: {max_cross_index}, 交点数量: {max_cross_count}")
-            if max_cross_count == 0:
+                max_cross_index = max(crossings, key=crossings.get)
+                max_cross_count = crossings[max_cross_index]
+                print(f"当前交点最多的法线索引: {max_cross_index}, 交点数量: {max_cross_count}")
+                if max_cross_count == 0:
+                    break
+                points_with_normals.pop(max_cross_index)
+            except Exception as e:
+                print(f"在去除交叉法线时发生异常: {e}")
                 break
-            points_with_normals.pop(max_cross_index)
+
         return points_with_normals
+
     points_with_normals = remove_crossing_normals(points_with_normals)
     print(f"去除交叉后剩余的法线数量: {len(points_with_normals)}")
+
     return points_with_normals
+
 
 
 def load_polylines_from_shp(file_path, ignore):
@@ -360,10 +416,6 @@ def extract_subcurve(line, point1, point2, show=False):
         print(f"提取子曲线时发生错误: {e}")
         return LineString()
 
-from shapely.geometry import LineString, Point, Polygon, MultiPoint
-
-import matplotlib.pyplot as plt
-from shapely.geometry import LineString
 
 
 def split_polyline_by_points(work_polyline, point1, point2, point1_index, point2_index, log=None):
@@ -525,33 +577,24 @@ def plot_north_south_lines(north_line, south_line):
     ax.set_aspect('equal', adjustable='box')
 
     plt.show()
-def plot_closed_shapes_with_polylines(center_normals, work_polyline, original_line, save, log=False):
+
+
+
+def plot_closed_shapes_with_polylines(center_normals, north_line, south_line, save, log=False):
     """
-    给定中心点、原始中心线和工作折线，求出每个封闭的区域。
+    给定中心点、北岸和南岸折线，求出每个封闭的区域。
     :param center_normals: 中心点及法线数据。
-    :param work_polyline: 工作折线（边界线）。
+    :param north_line: 北岸折线（上方折线）。
+    :param south_line: 南岸折线（下方折线）。
     :param original_line: 原始中心线（用于计算真实切线方向）。
-    :param show: 是否展示结果。
+    :param save: 是否保存结果图形。
     :param log: 是否绘制调试过程。
     :return: 封闭形状列表。
     """
     closed_shapes = []
-    coords = list(work_polyline.coords)
-
-    min_x_point = min(coords, key=lambda p: p[0])
-    min_y_point = min(coords, key=lambda p: p[1])
-    min_x_point = Point(min_x_point)
-    min_y_point = Point(min_y_point)
-    min_x_index = coords.index(min_x_point.coords[0])
-    min_y_index = coords.index(min_y_point.coords[0])
-    work_polyline = split_polyline_by_points(work_polyline,min_x_point,min_y_point,min_x_index,min_y_index)
-
     for i in range(len(center_normals) - 1):
         print(f"当前正在遍历 {i}")
-        if i==0:
-            continue
-        if i!=866:
-            continue
+
         # 当前点与下一个点
         current_point = center_normals[i][0]
         next_point = center_normals[i + 1][0]
@@ -561,43 +604,16 @@ def plot_closed_shapes_with_polylines(center_normals, work_polyline, original_li
         next_normal = center_normals[i + 1][1].coords
 
         # 提取法线点
-        current_p1 = Point(current_normal[0][0], current_normal[0][1])
-        current_p2 = Point(current_normal[1][0], current_normal[1][1])
-        next_p1 = Point(next_normal[0][0], next_normal[0][1])
-        next_p2 = Point(next_normal[1][0], next_normal[1][1])
+        current_above = Point(current_normal[0][0], current_normal[0][1]) # 北
+        current_below = Point(current_normal[1][0], current_normal[1][1]) # 南
+        next_above = Point(next_normal[0][0], next_normal[0][1]) # 北
+        next_below = Point(next_normal[1][0], next_normal[1][1]) # 南
 
-        # 确定中心线方向向量（以当前点指向下一点）
-        dvec = (next_point.x - current_point.x, next_point.y - current_point.y)
+        # 提取北岸（上方）和南岸（下方）的子曲线
+        upper_segment = extract_subcurve(north_line, current_above, next_above, show=log)
+        lower_segment = extract_subcurve(south_line, next_below, current_below, show=log)
 
-        # 计算参考法线方向（dvec旋转90度，选择 (-dy, dx)）
-        nref = (-dvec[1], dvec[0])
-
-        # 定义一个函数判断某点相对于中心点的法线方向
-        def classify_point(center, point, nref):
-            # 向量从中心点到目标点
-            v = (point.x - center.x, point.y - center.y)
-            # 计算点积
-            return v[0] * nref[0] + v[1] * nref[1]
-
-        # 使用点积与法线方向判断上下方点
-        if classify_point(current_point, current_p1, nref) > classify_point(current_point, current_p2, nref):
-            current_above = current_p1
-            current_below = current_p2
-        else:
-            current_above = current_p2
-            current_below = current_p1
-
-        if classify_point(next_point, next_p1, nref) > classify_point(next_point, next_p2, nref):
-            next_above = next_p1
-            next_below = next_p2
-        else:
-            next_above = next_p2
-            next_below = next_p1
-
-        # 提取工作折线的子曲线
-        upper_segment = extract_subcurve(work_polyline, current_above, next_above, show=log)
-        lower_segment = extract_subcurve(work_polyline, next_below,current_below, show=log)
-
+        # 构建封闭多边形
         polygon_coords = [
             (current_above.x, current_above.y),
             *list(upper_segment.coords),
@@ -632,8 +648,8 @@ def plot_closed_shapes_with_polylines(center_normals, work_polyline, original_li
             ax.set_ylim(min_y - y_range * margin, max_y + y_range * margin)
 
             # 绘制工作折线和原始中心线
-            ax.plot(*work_polyline.xy, color="blue", linewidth=1, label="Work Polyline")
-            ax.plot(*original_line.xy, color="gray", linestyle="--", linewidth=1, label="Original Centerline")
+            ax.plot(*north_line.xy, color="blue", linewidth=1, label="Work Polyline")
+            ax.plot(*south_line.xy, color="red", linewidth=1, label="Work Polyline")
 
             for j, shape in enumerate(closed_shapes):
                 hash_input = str(j).encode('utf-8')
@@ -872,24 +888,234 @@ def plot_split_points_with_lines(split_points_file, centerline_file, boundary_fi
     plt.grid(True)
     plt.axis("equal")
     plt.show()
+# 生成法线并绘制的函数
+def plot_normals_and_lines(line, north, south, interval=100):
+    # 调用生成法线的函数
+    points_with_normals = generate_infinite_normals_on_linestring_with_polyline(line, north, south, interval)
+
+    # 设置绘图
+    plt.figure(figsize=(10, 10))
+    ax = plt.gca()
+
+    # 绘制多段线
+    x, y = line.xy
+    ax.plot(x, y, label="Polyline", color='blue', lw=2)
+
+    # 绘制北岸和南岸参考线
+    x_north, y_north = north.xy
+    ax.plot(x_north, y_north, label="North Line", color='green', lw=2, linestyle='--')
+
+    x_south, y_south = south.xy
+    ax.plot(x_south, y_south, label="South Line", color='red', lw=2, linestyle='--')
+
+    # 绘制生成的法线
+    for point, normal_line in points_with_normals:
+        x_norm, y_norm = normal_line.xy
+        ax.plot(x_norm, y_norm, color='orange', lw=1)
+
+        # 标记法线的交点
+        ax.plot(point.x, point.y, 'ko', label="Intersection Point")
+
+    ax.set_aspect('equal')
+    ax.legend()
+    ax.set_title("Generated Normals on Polyline")
+    plt.show()
 
 
-def main(use_smoothing=True):
+from shapely.geometry import Point
+
+
+def find_point_in_closed_shapes(point, closed_shapes):
     """
-    主函数
-    :param use_smoothing: 是否使用平滑的中心线，True 表示使用平滑，False 表示使用原始中心线
+    判断一个点属于哪个 ClosedShape 的 Polygon 中。
+    :param point: 要检查的点 (shapely.geometry.Point)
+    :param closed_shapes: ClosedShape 对象的列表
+    :return: 属于的 ClosedShape 的索引和对象，如果不存在则返回 None
     """
+    for i, shape in enumerate(closed_shapes):
+        if shape.polygon.contains(point):
+            return i, shape  # 返回索引和对应的 ClosedShape 对象
+
+    return None, None  # 如果没有找到，返回 None
+
+
+def plot_all_ditches(polylines, log=True):
+    """
+    使用 matplotlib 展示所有的清沟（ditch）线条。
+
+    :param polylines: 由 load_polylines_from_shp 返回的 Polyline 对象列表。
+    :param log: 是否显示每条线的信息。
+    """
+    if not polylines:
+        print("未提供有效的清沟线条数据！")
+        return
+
+    fig, ax = plt.subplots(figsize=(12, 12))
+
+    for idx, polyline in enumerate(polylines):
+        x = [point.x for point in polyline.points]
+        y = [point.y for point in polyline.points]
+
+        ax.plot(x, y, label=f"Ditch {polyline.id}", linewidth=1)
+
+        if log:
+            print(f"清沟 {polyline.id}: 包含 {len(polyline.points)} 个点")
+
+    ax.set_title("All Ditches Visualization")
+    ax.set_xlabel("X Coordinate")
+    ax.set_ylabel("Y Coordinate")
+    ax.legend()
+
+    ax.set_aspect("equal", adjustable="box")
+    plt.grid(True)
+
+    plt.show()
+
+
+def get_ditch_endpoints(polylines):
+    """
+    获取所有清沟（ditch）的两个端点。
+
+    :param polylines: 由 load_polylines_from_shp 返回的 Polyline 对象列表。
+    :return: 包含每条 Polyline 两个端点的列表，格式为 [(start_point, end_point), ...]。
+    """
+    endpoints = []
+
+    for idx, polyline in enumerate(polylines):
+        if len(polyline.points) >= 2:
+            start_point = polyline.points[0]
+            end_point = polyline.points[-1]
+            endpoints.append((start_point, end_point))
+        else:
+            print(f"警告：Polyline {polyline.id} 点数不足，无法提取端点。")
+
+    return endpoints
+
+def process_ditch_endpoints(ditchs, closed_shapes,centerline, save_path=None, log=True):
+
+    results = []
+
+    for idx, ditch in enumerate(ditchs):
+        if len(ditch.points) < 2:
+            print(f"⚠️ 警告：清沟 {ditch.id} 只有一个点，跳过。")
+            continue
+
+        start_point = ditch.points[0]
+        end_point = ditch.points[-1]
+
+        # 处理起点
+        start_index, start_shape = find_point_in_closed_shapes(start_point, closed_shapes)
+        if start_shape:
+            proj_start_1 = start_shape.tangent_line_1.project(start_point)
+            proj_start_2 = start_shape.tangent_line_2.project(start_point)
+            proj_start_1_point = start_shape.tangent_line_1.interpolate(proj_start_1)
+            proj_start_2_point = start_shape.tangent_line_2.interpolate(proj_start_2)
+        else:
+            proj_start_1_point = None
+            proj_start_2_point = None
+            print(f"⚠️ 清沟 {ditch.id} 的起点不在任何 ClosedShape 中。")
+
+        # 处理终点
+        end_index, end_shape = find_point_in_closed_shapes(end_point, closed_shapes)
+        if end_shape:
+            proj_end_1 = end_shape.tangent_line_1.project(end_point)
+            proj_end_2 = end_shape.tangent_line_2.project(end_point)
+            proj_end_1_point = end_shape.tangent_line_1.interpolate(proj_end_1)
+            proj_end_2_point = end_shape.tangent_line_2.interpolate(proj_end_2)
+        else:
+            proj_end_1_point = None
+            proj_end_2_point = None
+            print(f"⚠️ 清沟 {ditch.id} 的终点不在任何 ClosedShape 中。")
+
+        # 存储结果
+        results.append({
+            "ditch_id": ditch.id,
+            "start_point": (start_point.x, start_point.y),
+            "start_proj_tangent_1": (proj_start_1_point.x, proj_start_1_point.y) if proj_start_1_point else None,
+            "start_proj_tangent_2": (proj_start_2_point.x, proj_start_2_point.y) if proj_start_2_point else None,
+            "end_point": (end_point.x, end_point.y),
+            "end_proj_tangent_1": (proj_end_1_point.x, proj_end_1_point.y) if proj_end_1_point else None,
+            "end_proj_tangent_2": (proj_end_2_point.x, proj_end_2_point.y) if proj_end_2_point else None,
+        })
+
+        if log:
+            fig, ax = plt.subplots(figsize=(12, 8))
+
+            x, y = centerline.line.xy
+            ax.plot(x, y, color="gray", linewidth=2)
+            # 绘制清沟
+            x = [point.x for point in ditch.points]
+            y = [point.y for point in ditch.points]
+            ax.plot(x, y, label=f"Ditch {ditch.id}", color="blue", linewidth=2)
+
+            # 绘制端点
+            ax.scatter(start_point.x, start_point.y, color='red', label='Start Point', zorder=5)
+            ax.scatter(end_point.x, end_point.y, color='purple', label='End Point', zorder=5)
+
+            # 绘制起点投影点
+            if proj_start_1_point:
+                ax.scatter(proj_start_1_point.x, proj_start_1_point.y, color='orange', zorder=5,s=10)
+                ax.plot([start_point.x, proj_start_1_point.x], [start_point.y, proj_start_1_point.y], color='orange', linestyle='--')
+            if proj_start_2_point:
+                ax.scatter(proj_start_2_point.x, proj_start_2_point.y, color='cyan', zorder=5,s=10)
+                ax.plot([start_point.x, proj_start_2_point.x], [start_point.y, proj_start_2_point.y], color='cyan', linestyle='--')
+
+            # 绘制终点投影点
+            if proj_end_1_point:
+                ax.scatter(proj_end_1_point.x, proj_end_1_point.y, color='orange', zorder=5,s=10)
+                ax.plot([end_point.x, proj_end_1_point.x], [end_point.y, proj_end_1_point.y], color='orange', linestyle='--')
+            if proj_end_2_point:
+                ax.scatter(proj_end_2_point.x, proj_end_2_point.y, color='cyan', zorder=5,s=10)
+                ax.plot([end_point.x, proj_end_2_point.x], [end_point.y, proj_end_2_point.y], color='cyan', linestyle='--')
+
+
+
+            for j, shape in enumerate(closed_shapes):
+                hash_input = str(j).encode('utf-8')
+                hash_digest = hashlib.md5(hash_input).hexdigest()
+                color = '#' + hash_digest[:6]
+
+                px, py = shape.polygon.exterior.xy
+                ax.fill(px, py, color=color, alpha=0.5, label=f"Closed Shape {j}" if j == 0 else "")
+                ax.plot(px, py, color="red", linewidth=0.7)
+
+            # 设置展示范围：清沟周围上下左右 1000 米
+            min_x = min(x)
+            max_x = max(x)
+            min_y = min(y)
+            max_y = max(y)
+
+            ax.set_xlim(min_x - 5000, max_x + 5000)
+            ax.set_ylim(min_y - 5000, max_y + 5000)
+
+            ax.set_title(f"Ditch {ditch.id} with Projections")
+            ax.set_xlabel("X Coordinate")
+            ax.set_ylabel("Y Coordinate")
+            ax.legend()
+            ax.set_aspect('equal', adjustable='box')
+            plt.grid(True)
+
+            if save_path:
+                plt.savefig(f"{save_path}/ditch_{ditch.id}_projections.png", dpi=300, bbox_inches='tight')
+                print(f"图像已保存到 {save_path}/ditch_{ditch.id}_projections.png")
+                plt.close()
+            else:
+                plt.show()
+    return results
+
+
+def main():
+
     # 中心线
     centerline_file = "D:/机器学习数据/中心线和南北岸线/中心线平滑.shp"
     polylines = load_polylines_from_shp(centerline_file, False)
-    merged_line = merge_polylines(polylines, False)
+    merged_center_line = merge_polylines(polylines, False)
 
     # 边界线
     boundary_file = "D:/机器学习数据/中心线和南北岸线/南北线_修改后.shp"
     work_polylines = load_polylines_from_shp(boundary_file, False)
-    boundary_polygon = work_polylines[0].line.convex_hull
 
-    north_south_file= "split_points.yaml"
+    north_south_file= "north_south_line.json"
 
     if os.path.exists(north_south_file):
         print(f"Found existing closed shapes file: {north_south_file}. Loading closed shapes...")
@@ -907,85 +1133,36 @@ def main(use_smoothing=True):
 
         north_line,south_line = split_polyline_by_points(work_polyline,min_x_point,min_y_point,min_x_index,min_y_index)
         save_north_south_lines_to_json(north_line, south_line, "north_south_line.json")
-        plot_north_south_lines(north_line,south_line)
-    #
-    #
-    # # 是否进行平滑处理
-    # if use_smoothing:
-    #     print("Using smoothed centerline...")
-    #     centerline = merged_line.smooth_with_boundary(boundary=boundary_polygon, interval=1000, new_id="smoothed_centerline")
-    # else:
-    #     print("Using original centerline...")
-    #     centerline = merged_line
-    #
-    # # 分割点结果文件
-    # split_points_file = "split_points.yaml"
-    # if os.path.exists(split_points_file):
-    #     print(f"Found existing split points file: {split_points_file}. Loading split points...")
-    #     result = load_split_points_from_file(split_points_file, is_yaml=True)
-    # else:
-    #     print("No existing split points file found. Running calculations...")
-    #     result = generate_infinite_normals_on_linestring_with_polyline(centerline.line, work_polylines[0].line, interval=1000)
-    #     save_split_points_to_file(result, split_points_file, file_format="yaml")
-    #     print(f"Split points saved to {split_points_file}")
-    #
-    # # Closed Shapes 结果文件
-    # closed_shapes_file = "closed_shapes.yaml"
-    # if os.path.exists(closed_shapes_file):
-    #     print(f"Found existing closed shapes file: {closed_shapes_file}. Loading closed shapes...")
-    #     closed_shapes = load_closed_shapes_from_file(closed_shapes_file, is_yaml=True)
-    # else:
-    #     print("No existing closed shapes file found. Generating closed shapes...")
-    #     closed_shapes = plot_closed_shapes_with_polylines(result, work_polylines[0].line,centerline.line, save="D:\\code\\shpdealer\\result2",log=True)
-    #     save_closed_shapes_to_file(closed_shapes, closed_shapes_file, file_format="yaml")
-    # # 开始绘制所有元素
-    # fig, ax = plt.subplots(figsize=(12, 12))
-    #
-    # print("绘制边界线")
-    # # 绘制边界线
-    # for i, boundary in enumerate(work_polylines):
-    #     bx, by = boundary.line.xy
-    #     ax.plot(bx, by, color="green", label="Boundary Line" if i == 0 else "", linestyle="--")
-    #
-    # print("中心线")
-    # # 绘制原始中心线（仅当平滑启用时）
-    # if use_smoothing:
-    #     ox, oy = merged_line.line.xy  # 原始中心线
-    #     ax.plot(ox, oy, color="gray", linewidth=1, linestyle="--", label="Original Centerline")
-    #
-    # # 绘制平滑后的中心线或原始中心线
-    # cx, cy = centerline.line.xy
-    # if use_smoothing:
-    #     ax.plot(cx, cy, color="blue", linewidth=2, label="Smoothed Centerline")
-    # else:
-    #     ax.plot(cx, cy, color="blue", linewidth=2, label="Original Centerline")
-    #
-    # # 绘制分割点及法线
-    # for point, normal_line in result:
-    #     ax.scatter(point.x, point.y, color="red", s=10, label="Split Points" if "Split Points" not in ax.get_legend_handles_labels()[1] else "")
-    #     nx, ny = normal_line.xy
-    #     ax.plot(nx, ny, color="orange", linestyle=":", linewidth=0.5, label="Normal Line" if "Normal Line" not in ax.get_legend_handles_labels()[1] else "")
-    #
-    # print("绘制闭合形状")
-    # # 绘制闭合形状
-    # for i, shape in enumerate(closed_shapes):
-    #     print(f"绘制{i}")
-    #     px, py = shape.polygon.exterior.xy
-    #     color = (random.random(), random.random(), random.random())
-    #     ax.plot(px, py, color=color, label=f"Closed Shape {i}" if i == 0 else "")
-    #     ax.fill(px, py, color=color, alpha=0.2)
-    #
-    # # 设置图例、标题与样式
-    # ax.legend()
-    # ax.set_title("Centerline, Boundary, Split Points, and Closed Shapes")
-    # ax.set_aspect("equal", adjustable="box")
-    # plt.xlabel("X Coordinate")
-    # plt.ylabel("Y Coordinate")
-    # plt.grid(True)
-    # plt.show()
+
+    # 分割点结果文件
+    split_points_file = "split_points.yaml"
+    if os.path.exists(split_points_file):
+        print(f"Found existing split points file: {split_points_file}. Loading split points...")
+        split_points = load_split_points_from_file(split_points_file, is_yaml=True)
+
+    else:
+        print("No existing split points file found. Running calculations...")
+        # plot_normals_and_lines(merged_center_line.line, north_line, south_line, interval=1000)
+        split_points = generate_infinite_normals_on_linestring_with_polyline(merged_center_line.line, north_line,south_line, interval=1000)
+        save_split_points_to_file(split_points, split_points_file, file_format="yaml")
+        # print(f"Split points saved to {split_points_file}")
+
+
+    # Closed Shapes 结果文件
+    closed_shapes_file = "closed_shapes.yaml"
+    if os.path.exists(closed_shapes_file):
+        print(f"Found existing closed shapes file: {closed_shapes_file}. Loading closed shapes...")
+        closed_shapes = load_closed_shapes_from_file(closed_shapes_file, is_yaml=True)
+    else:
+        print("No existing closed shapes file found. Generating closed shapes...")
+        closed_shapes = plot_closed_shapes_with_polylines(split_points,north_line,south_line, save="D:\\code\\shpdealer\\result2")
+        save_closed_shapes_to_file(closed_shapes, closed_shapes_file, file_format="yaml")
+
+    # 清沟
+    ditch_file="D:\\机器学习数据\\河道中心线和清沟样例\\河道中心线和清沟样例\\20230305清沟_hz.shp"
+    ditchs = load_polylines_from_shp(ditch_file, False)
+    process_ditch_endpoints(ditchs,closed_shapes,merged_center_line,r"D:\code\shpdealer\result3",True)
 
 
 if __name__ == "__main__":
-    # 控制是否使用平滑
-    use_smoothing = True
-    main(use_smoothing)
+    main()
