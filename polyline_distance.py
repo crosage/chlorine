@@ -1096,6 +1096,10 @@ def process_ditch_endpoints(ditchs, closed_shapes,centerline, save_path=None, lo
             plt.grid(True)
 
             if save_path:
+                if not os.path.exists(save_path):
+                    os.makedirs(save_path)
+                    print(f"文件夹 {save_path} 已创建。")
+
                 plt.savefig(f"{save_path}/ditch_{ditch.id}_projections.png", dpi=300, bbox_inches='tight')
                 print(f"图像已保存到 {save_path}/ditch_{ditch.id}_projections.png")
                 plt.close()
@@ -1155,13 +1159,13 @@ def main():
         closed_shapes = load_closed_shapes_from_file(closed_shapes_file, is_yaml=True)
     else:
         print("No existing closed shapes file found. Generating closed shapes...")
-        closed_shapes = plot_closed_shapes_with_polylines(split_points,north_line,south_line, save="D:\\code\\shpdealer\\result2")
+        closed_shapes = plot_closed_shapes_with_polylines(split_points,north_line,south_line, save="D:\\code\\shpdealer\\closeshape")
         save_closed_shapes_to_file(closed_shapes, closed_shapes_file, file_format="yaml")
 
     # 清沟
     ditch_file="D:\\机器学习数据\\河道中心线和清沟样例\\河道中心线和清沟样例\\20230305清沟_hz.shp"
     ditchs = load_polylines_from_shp(ditch_file, False)
-    process_ditch_endpoints(ditchs,closed_shapes,merged_center_line,r"D:\code\shpdealer\result3",True)
+    process_ditch_endpoints(ditchs,closed_shapes,merged_center_line,r"D:\code\shpdealer\ditch",True)
 
 
 if __name__ == "__main__":
