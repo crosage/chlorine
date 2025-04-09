@@ -4,8 +4,10 @@ import os
 import convert_to_grey
 from convert_crs import convert_crs
 from convert_to_uint16 import convert_to_uint16
+from crop_image import crop_image
 from crop_xy import crop_file
 from crop import shapefile_to_bw_label
+from generater import generate_dummy_ground_truth
 from img2tif import convert_img_to_tiff
 from resizer import resize
 from imggetter import process_file
@@ -32,6 +34,8 @@ app.command(name="image-info", help="根据文件路径自动判断文件类型�
 app.command(name="resize-image", help="压缩图片大小")(resize)
 app.command(name="split-image", help="切割图片")(split_images)
 app.command(name="set-fourth-channel", help="设置第四个通道")(set_fourth_channel_to_one)
+app.command(name="generate-ground-truth",help="生成不存在的真值图")(generate_dummy_ground_truth)
+app.command(name="crop-image",help="分割图片")(crop_image)
 
 
 if __name__ == "__main__":
