@@ -9,7 +9,7 @@ from crop_xy import crop_file
 from crop import shapefile_to_bw_label
 from dehazer import run_dehazing
 from generater import generate_dummy_ground_truth
-from img2tif import convert_img_to_tiff
+from img_to_tif import convert_img_to_tiff
 from resizer import resize
 from imggetter import process_file
 from sample_area_getter import extract_polygon
