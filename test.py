@@ -1,17 +1,49 @@
-import cv2
 import numpy as np
-from collections import Counter
+import tifffile
 
-# 读取图像并转换为灰度图像
-image_path = "D:\GF6_LTR_x1_y75.png"
-image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+def get_tiff_rgb_range_tifffile(tiff_filepath):
+    try:
+        # 使用 tifffile 读取图像，直接得到 NumPy 数组
+        img_array = tifffile.imread(tiff_filepath)
+        dtype = img_array.dtype
 
-# 将图像展开为一维数组
-flattened_image = image.flatten()
+        # 后续处理与 Pillow 方法类似...
+        if img_array.ndim == 3 and img_array.shape[-1] >= 3: # 假设通道在最后维度
+            # 根据实际的通道顺序调整索引 [:,:,0] 或 [0,:,:] 等
+            # 例如，如果 shape 是 (channels, height, width)
+            if img_array.shape[0] == 3 or img_array.shape[0] == 4:
+                 r_channel = img_array[0, :, :]
+                 g_channel = img_array[1, :, :]
+                 b_channel = img_array[2, :, :]
+            # 例如，如果 shape 是 (height, width, channels)
+            elif img_array.shape[2] == 3 or img_array.shape[2] == 4:
+                 r_channel = img_array[:, :, 0]
+                 g_channel = img_array[:, :, 1]
+                 b_channel = img_array[:, :, 2]
+            else:
+                return f"错误：无法确定 RGB 通道维度 {img_array.shape}"
 
-# 使用Counter统计每个像素值的出现次数
-pixel_counts = Counter(flattened_image)
+            ranges = {
+                'R': (np.min(r_channel), np.max(r_channel)),
+                'G': (np.min(g_channel), np.max(g_channel)),
+                'B': (np.min(b_channel), np.max(b_channel)),
+                'dtype': str(dtype)
+            }
+            return ranges
+        elif img_array.ndim == 2:
+            return {
+                'Grayscale': (np.min(img_array), np.max(img_array)),
+                'dtype': str(dtype)
+            }
+        else:
+             return f"错误：不支持的图像维度 {img_array.shape}"
+    except FileNotFoundError:
+        return f"错误：文件未找到 '{tiff_filepath}'"
+    except Exception as e:
+        return f"处理文件 '{tiff_filepath}' 时出错: {e}"
 
-# 输出每个像素值及其出现的次数
-for pixel_value, count in pixel_counts.items():
-    print(f"Pixel Value: {pixel_value}, Count: {count}")
+# --- 使用示例 ---
+file_path = "D:\Train\origin\GF1_PMS1_E51.6_N49.6_20231106_L1A13154817001-MSS1_fuse.tiff"
+result = get_tiff_rgb_range_tifffile(file_path)
+# ... (后续打印部分与 Pillow 示例相同) ...
+print(result)

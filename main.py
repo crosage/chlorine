@@ -7,6 +7,7 @@ from convert_to_uint16 import convert_to_uint16
 from crop_image import crop_image
 from crop_xy import crop_file
 from crop import shapefile_to_bw_label
+from dehazer import run_dehazing
 from generater import generate_dummy_ground_truth
 from img2tif import convert_img_to_tiff
 from resizer import resize
@@ -36,7 +37,7 @@ app.command(name="split-image", help="切割图片")(split_images)
 app.command(name="set-fourth-channel", help="设置第四个通道")(set_fourth_channel_to_one)
 app.command(name="generate-ground-truth",help="生成不存在的真值图")(generate_dummy_ground_truth)
 app.command(name="crop-image",help="分割图片")(crop_image)
-
+app.command(name="dehazer",help="去雾")(run_dehazing)
 
 if __name__ == "__main__":
     app()
