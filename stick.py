@@ -1,4 +1,3 @@
-import os
 import re
 from collections import defaultdict
 from pathlib import Path
@@ -6,419 +5,269 @@ from PIL import Image
 import numpy as np
 import argparse
 import rasterio
-from rasterio.enums import Resampling
-import sys # Import sys for sys.exit
+import sys
 
 EXTENSION_TO_FORMAT = {
-    '.jpg': 'JPEG',
-    '.jpeg': 'JPEG',
-    '.png': 'PNG',
-    '.tif': 'TIFF',
-    '.tiff': 'TIFF'
+    '.jpg': 'JPEG', '.jpeg': 'JPEG', '.png': 'PNG', '.tif': 'TIFF', '.tiff': 'TIFF'
 }
-
 FILENAME_PATTERN = re.compile(
-    r"^(.*?)_x(\d+)_y(\d+).*?(\.jpg|\.jpeg|\.png|\.tif|\.tiff)$",
-    re.IGNORECASE
+    r"^(.*?)_x(\d+)_y(\d+).*?(\.jpg|\.jpeg|\.png|\.tif|\.tiff)$", re.IGNORECASE
 )
 OUTPUT_MIDDLE_PART = "_stitched"
+
+# --- 辅助函数 ---
 
 def parse_filename(filename):
     match = FILENAME_PATTERN.match(filename)
     if match:
-        identifier = match.group(1)
-        x = int(match.group(2))
-        y = int(match.group(3))
-        extension = match.group(4).lower()
-        return identifier, x, y, extension
-    else:
-        return None
+        identifier, row, col, ext = match.groups()
+        if ext.lower() not in EXTENSION_TO_FORMAT:
+            return None
+        return identifier, int(row), int(col), ext.lower()
+    return None
+
+def get_required_tile_properties(filepath: Path, is_tiff: bool):
+    width, height, channels, dtype, pillow_mode, profile = None, None, None, None, None, None
+    try:
+        if is_tiff:
+            with rasterio.open(filepath) as src:
+                width, height = src.width, src.height
+                channels = src.count
+                dtype = np.dtype(src.dtypes[0])
+                profile = src.profile
+                print(f"  基准属性 (TIFF) - 尺寸:{width}x{height}, 通道:{channels}, 类型:{dtype}")
+        else:
+            with Image.open(filepath) as img:
+                width, height = img.size
+                mode = img.mode
+                if mode == 'L': channels = 1; dtype = np.uint8; pillow_mode = 'L'
+                elif mode == 'RGB': channels = 3; dtype = np.uint8; pillow_mode = 'RGB'
+                elif mode == 'RGBA': channels = 4; dtype = np.uint8; pillow_mode = 'RGBA'
+                else:
+                    print(f"  警告: 基准切片模式为 '{mode}'。将尝试转换为 RGB。如果后续切片不匹配或转换失败，可能出错。")
+                    try:
+                        img_conv = img.convert('RGB')
+                        pillow_mode = 'RGB'; channels = 3; dtype = np.uint8
+                    except Exception as e:
+                        raise ValueError(f"无法将模式 '{mode}' 转换为 RGB: {e}")
+
+                if pillow_mode is None: raise ValueError("未能确定有效的 Pillow 模式")
+                print(f"  基准属性 (Pillow) - 尺寸:{width}x{height}, 模式:{pillow_mode}, 通道:{channels}, 类型:{dtype}")
+
+        if not all([width is not None, height is not None, channels is not None, dtype is not None]):
+             raise ValueError("未能获取完整的基准属性")
+
+        return width, height, channels, dtype, pillow_mode, profile
+
+    except (FileNotFoundError, rasterio.RasterioIOError, Image.UnidentifiedImageError, ValueError, Exception) as e:
+        print(f"错误: 读取基准切片 '{filepath}' 失败: {e}", file=sys.stderr)
+        raise RuntimeError(f"无法处理基准切片 {filepath.name}") from e
+
+
+def save_stitched_image(canvas: np.ndarray, output_filepath: Path, is_tiff: bool,
+                        base_profile: dict, base_pillow_mode: str,
+                        total_height: int, total_width: int, channels: int, dtype: np.dtype,
+                        origin_transform=None, origin_crs=None):
+    print(f"  正在保存: {output_filepath}")
+    try:
+        if is_tiff:
+            if not base_profile: raise ValueError("缺少 TIFF Profile 信息")
+            profile = base_profile.copy()
+            profile.update({
+                'height': total_height, 'width': total_width, 'count': channels,
+                'dtype': dtype, 'driver': 'GTiff',
+                'compress': profile.get('compress', 'deflate'),
+                'tiled': profile.get('tiled', True)
+            })
+            if profile['tiled'] and not ('blockxsize' in profile and 'blockysize' in profile):
+                block_size = 256
+                profile['blockxsize'] = min(block_size, profile['width'])
+                profile['blockysize'] = min(block_size, profile['height'])
+
+            if origin_transform:
+                profile['transform'] = origin_transform
+                profile['crs'] = origin_crs
+            else:
+                 print("    警告: 未找到原点 (0,0) 的有效 Transform。可能无地理参考或使用基准切片的参考。")
+                 if 'transform' not in base_profile: profile.pop('transform', None)
+                 if 'crs' not in base_profile: profile.pop('crs', None)
+
+            profile.pop('nodata', None)
+
+            with rasterio.open(output_filepath, 'w', **profile) as dest:
+                dest.write(canvas.transpose(2, 0, 1) if channels > 1 else canvas,
+                           indexes=list(range(1, channels + 1)) if channels > 1 else 1)
+            print(f"    Rasterio 保存 TIFF 成功!")
+
+        else:
+            if not base_pillow_mode: raise ValueError("缺少 Pillow 模式信息")
+            try:
+                stitched_image = Image.fromarray(canvas, mode=base_pillow_mode)
+            except Exception as e:
+                raise ValueError(f"从 NumPy 数组创建 Pillow 图像失败 (模式:{base_pillow_mode}, 类型:{canvas.dtype}): {e}")
+
+            save_options = {}
+            img_to_save = stitched_image
+            output_format_string = EXTENSION_TO_FORMAT[output_filepath.suffix.lower()]
+
+            if output_format_string == 'JPEG':
+                save_options['quality'] = 95
+                if img_to_save.mode != 'RGB':
+                    print(f"    注意: 转换为 RGB 模式以保存为 JPEG。")
+                    try:
+                        img_to_save = img_to_save.convert('RGB')
+                    except Exception as conv_e:
+                        raise ValueError(f"无法转换为 RGB 以保存 JPEG: {conv_e}")
+            elif output_format_string == 'PNG':
+                save_options['compress_level'] = 6
+
+            img_to_save.save(output_filepath, format=output_format_string, **save_options)
+            print(f"    Pillow 保存 {output_format_string} 成功!")
+
+    except (rasterio.RasterioIOError, ValueError, TypeError, Exception) as e:
+        print(f"错误: 保存文件 '{output_filepath}' 失败: {e}", file=sys.stderr)
+        raise RuntimeError("保存失败") from e
 def stitch_images(input_dir: Path, output_dir: Path):
     if not input_dir.is_dir():
-        print(f"错误: 输入路径 '{input_dir}' 不是一个有效的文件夹。")
-        sys.exit(1) # Exit if input dir is invalid
-
+        print(f"错误: 输入路径 '{input_dir}' 无效。", file=sys.stderr)
+        sys.exit(1)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # 1. 扫描并分组
     tiles_by_identifier = defaultdict(list)
     print(f"正在扫描文件夹: {input_dir}")
     for filepath in input_dir.iterdir():
         if filepath.is_file():
-            parsed_info = parse_filename(filepath.name)
-            if parsed_info:
-                identifier, x, y, extension = parsed_info
-                tiles_by_identifier[identifier].append({
-                    "path": filepath, "x": x, "y": y, "ext": extension
+            parsed = parse_filename(filepath.name)
+            if parsed:
+                tiles_by_identifier[parsed[0]].append({
+                    "path": filepath, "row": parsed[1], "col": parsed[2], "ext": parsed[3]
                 })
 
     if not tiles_by_identifier:
-        print("在输入文件夹中没有找到符合命名规则的文件。")
-        print(f"文件名需要匹配: (名称)_x(数字)_y(数字).(jpg/jpeg/png/tif/tiff)")
-        return # No need to exit, just inform and finish
+        print("错误: 未找到符合 '名称_x行号_y列号.扩展名' 规则的文件。", file=sys.stderr)
+        return
+    print(f"找到 {len(tiles_by_identifier)} 个标识符。")
 
-    print(f"找到了 {len(tiles_by_identifier)} 个不同的图像标识符进行拼接。")
-
-    for identifier, original_tiles in tiles_by_identifier.items():
-        print(f"\n正在处理标识符: {identifier}")
-        if not original_tiles: continue
-        tiles = original_tiles
-
-        if not tiles:
-             print(f" 标识符 '{identifier}' 没有找到有效的切片。跳过。")
-             continue
+    # 2. 逐个标识符处理
+    for identifier, tiles in tiles_by_identifier.items():
+        print(f"\n--- 处理标识符: {identifier} ---")
+        if not tiles: continue
 
         first_tile_info = tiles[0]
         output_ext = first_tile_info['ext']
-        is_output_tiff = output_ext in ['.tif', '.tiff']
-        output_format_string = EXTENSION_TO_FORMAT.get(output_ext) # Pillow 格式
-
-        if not output_format_string:
-            print(f" 错误: 不支持的文件扩展名 '{output_ext}'。跳过。")
-            continue
-
-        print(f" 检测到输入格式为 {output_ext}。")
-        if is_output_tiff:
-            print(" 将使用 Rasterio 保存输出 TIFF (尝试保留地理信息)。")
-        else:
-            print(f" 将使用 Pillow 保存输出 {output_format_string}。")
-
-
-        tile_width, tile_height, channels, determined_dtype = None, None, None, None
-        first_tile_profile = None
-        pillow_mode = None
+        is_tiff = output_ext in ['.tif', '.tiff']
 
         try:
-            # --- 读取第一个切片信息 (use the potentially filtered list) ---
-            if is_output_tiff:
-                print(f" 使用 Rasterio 读取第一个 TIFF 切片信息: {first_tile_info['path'].name}")
-                with rasterio.open(first_tile_info['path']) as src:
-                    tile_width = src.width
-                    tile_height = src.height
-                    channels = src.count
-                    determined_dtype = np.dtype(src.dtypes[0])
-                    first_tile_profile = src.profile
-            else:
-                print(f" 使用 Pillow 读取第一个切片信息: {first_tile_info['path'].name}")
-                with Image.open(first_tile_info['path']) as img:
-                    tile_width, tile_height = img.size
-                    mode = img.mode
-                    if mode == 'L': channels = 1; determined_dtype = np.uint8
-                    elif mode == 'RGB': channels = 3; determined_dtype = np.uint8
-                    elif mode == 'RGBA': channels = 4; determined_dtype = np.uint8
-                    elif mode == 'P':
-                        try: # Add try-except for conversion just in case
-                            img_conv = img.convert('RGB'); mode = img_conv.mode
-                            channels = 3; determined_dtype = np.uint8
-                        except Exception as conv_e:
-                             print(f"   警告: 转换 P 模式图像 '{first_tile_info['path'].name}' 到 RGB 失败: {conv_e}。 尝试RGBA。")
-                             try:
-                                 img_conv = img.convert('RGBA'); mode = img_conv.mode
-                                 channels = 4; determined_dtype = np.uint8
-                             except Exception as conv_e2:
-                                  print(f"   错误: 转换 P 模式图像 '{first_tile_info['path'].name}' 到 RGBA 也失败: {conv_e2}。跳过。")
-                                  continue # Skip this identifier if conversion fails
-
-                    elif mode == 'I;16': channels = 1; determined_dtype = np.uint16
-                    elif mode == 'I': channels = 1; determined_dtype = np.int32
-                    elif mode == 'F': channels = 1; determined_dtype = np.float32
-                    else: # Default conversion fallback
-                        print(f"   警告: 未知模式 '{mode}' for '{first_tile_info['path'].name}'. 尝试转换为 RGB。")
-                        try:
-                             img_conv = img.convert('RGB'); mode = img_conv.mode
-                             channels = 3; determined_dtype = np.uint8
-                        except Exception as conv_e:
-                            print(f"   错误: 转换未知模式图像 '{first_tile_info['path'].name}' 到 RGB 失败: {conv_e}。跳过。")
-                            continue # Skip this identifier
-
-                    pillow_mode = mode # Save the final mode used
-
-        except Exception as e:
-            print(f"错误: 无法读取第一个切片文件 '{first_tile_info['path']}' 来确定属性: {e}")
-            continue
-
-        if not all([tile_width is not None, tile_height is not None, channels is not None, determined_dtype is not None]):
-            print(f"错误: 未能成功确定第一个切片的完整属性。跳过 '{identifier}'.")
-            continue
-
-        print(f" 切片尺寸: {tile_width}x{tile_height}, 通道: {channels}, 类型: {determined_dtype}")
-
-        # --- Calculations based on the potentially filtered 'tiles' list ---
-        max_x = max(tile['x'] for tile in tiles)
-        max_y = max(tile['y'] for tile in tiles) # This max_y is now correct based on filtered tiles
-        grid_width = max_x + 1
-        grid_height = max_y + 1 # This grid_height is now correct
-        total_width = grid_width * tile_width
-        total_height = grid_height * tile_height # This total_height uses the potentially reduced grid_height
-
-        print(f" 计算网格大小: {grid_width}x{grid_height} (基于找到/过滤后的切片)")
-        print(f" 最终图像尺寸: {total_width}x{total_height}")
-
-        # 创建 NumPy 画布
-        canvas_shape = (total_height, total_width, channels) if channels > 1 else (total_height, total_width)
-        try:
-            # Check for zero dimensions before creating canvas
-            if total_height <= 0 or total_width <= 0:
-                 print(f"错误: 计算得到的画布尺寸无效 ({total_height}x{total_width})。跳过 '{identifier}'。")
-                 continue
-            canvas = np.zeros(canvas_shape, dtype=determined_dtype)
-            print(f" 已创建画布，形状: {canvas.shape}, 类型: {canvas.dtype}")
-        except MemoryError:
-            print(f"错误: 创建画布时内存不足！尺寸: {canvas_shape}, 类型: {determined_dtype}。尝试减小 --max-rows (如果适用)。")
-            continue
-        except ValueError as ve:
-             print(f"错误: 创建画布时值错误 (可能是类型或形状问题): {ve}")
-             continue
-
-        print(" 正在粘贴切片...")
-        processed_tiles = 0
-        # Iterate through the potentially filtered 'tiles' list
-        for tile_info in tiles:
-            try:
-                tile_array = None
-                if tile_info['ext'] in ['.tif', '.tiff']:
-                    with rasterio.open(tile_info['path']) as tile_src:
-                        # Check consistency against the *first* tile's properties
-                        if tile_src.width != tile_width or tile_src.height != tile_height \
-                           or tile_src.count != channels or np.dtype(tile_src.dtypes[0]) != determined_dtype:
-                            print(f"  警告: 切片 {tile_info['path'].name} 属性与第一个切片不符，跳过。")
-                            continue
-                        data = tile_src.read() # C, H, W
-                        if channels > 1: tile_array = data.transpose(1, 2, 0) # H, W, C
-                        else: tile_array = data[0] # H, W
-                else: # 使用 Pillow 读取
-                    with Image.open(tile_info['path']) as tile_img:
-                        if tile_img.width != tile_width or tile_img.height != tile_height:
-                            print(f"  警告: 切片 {tile_info['path'].name} 尺寸不符，跳过。")
-                            continue
-                        # Mode consistency check/conversion (using determined pillow_mode)
-                        current_mode = tile_img.mode
-                        final_tile_img = tile_img
-                        if pillow_mode and current_mode != pillow_mode:
-                           # Handle 'P' mode specifically if target is RGB/RGBA
-                           if current_mode == 'P' and pillow_mode in ['RGB', 'RGBA']:
-                               try:
-                                   final_tile_img = tile_img.convert(pillow_mode)
-                               except Exception as conv_e:
-                                   print(f"  警告: 转换切片 {tile_info['path'].name} (模式 {current_mode}) 到目标模式 {pillow_mode} 失败: {conv_e}。跳过。")
-                                   continue
-                           # Generic conversion attempt only if modes differ significantly
-                           elif current_mode != pillow_mode: # Avoid unnecessary conversions if e.g. both are RGB
-                                print(f"  注意: 切片 {tile_info['path'].name} (模式 {current_mode}) 与目标模式 {pillow_mode} 不同。尝试转换。")
-                                try:
-                                   final_tile_img = tile_img.convert(pillow_mode)
-                                except Exception as conv_e:
-                                   print(f"  警告: 转换切片 {tile_info['path'].name} 到目标模式 {pillow_mode} 失败: {conv_e}。跳过。")
-                                   continue
-
-                        tile_array = np.array(final_tile_img)
-                        # Type check/conversion (ensure consistency)
-                        if tile_array.dtype != determined_dtype:
-                             try:
-                                 # Be cautious with type conversions, ensure they make sense
-                                 # e.g., float to int might lose data
-                                 print(f"  注意: 切片 {tile_info['path'].name} 类型 ({tile_array.dtype}) 与目标类型 ({determined_dtype}) 不同。尝试转换。")
-                                 tile_array = tile_array.astype(determined_dtype)
-                             except Exception as dtype_e:
-                                 print(f"  错误: 转换切片 {tile_info['path'].name} 类型失败: {dtype_e}。跳过。")
-                                 continue
-
-
-                # --- Pasting logic remains the same ---
-                if tile_array is not None:
-                    print(f"名字：{tile_info['path'].name}   {tile_info['x']}    {tile_info['y']}")
-                    # Calculate position based on tile's y coordinate (which is already < max_rows if filtering applied)
-                    x_pos = tile_info['x'] * tile_width
-                    y_pos = tile_info['y'] * tile_height
-
-                    # Boundary check (shouldn't be necessary if canvas size is correct, but safe)
-                    if y_pos + tile_height > total_height or x_pos + tile_width > total_width:
-                        print(f"   警告: 切片 {tile_info['path'].name} 坐标 ({tile_info['x']},{tile_info['y']}) 超出计算的画布边界。跳过。")
-                        continue
-
-                    if channels > 1:
-                        # Ensure tile_array has the correct number of channels
-                        if tile_array.shape[2] != channels:
-                             print(f"   警告: 切片 {tile_info['path'].name} 通道数 ({tile_array.shape[2]}) 与预期 ({channels}) 不符。跳过。")
-                             continue
-                        canvas[y_pos : y_pos + tile_height, x_pos : x_pos + tile_width, :] = tile_array
-                    else:
-                        # Ensure tile_array is 2D for single channel
-                        if tile_array.ndim != 2:
-                             print(f"   警告: 单通道切片 {tile_info['path'].name} 维度 ({tile_array.ndim}) 不正确。跳过。")
-                             continue
-                        canvas[y_pos : y_pos + tile_height, x_pos : x_pos + tile_width] = tile_array
-                    processed_tiles += 1
-
-            except FileNotFoundError:
-                 print(f"错误: 找不到切片文件 '{tile_info['path']}'。")
-            except rasterio.RasterioIOError as rio_e:
-                 print(f"错误: Rasterio 读取切片 '{tile_info['path']}' 时出错: {rio_e}")
-            except Image.UnidentifiedImageError:
-                 print(f"错误: Pillow 无法识别或打开切片 '{tile_info['path']}'。")
-            except Exception as e:
-                 print(f"错误: 处理/粘贴切片 '{tile_info['path']}' 时发生意外错误: {e}")
-
-        print(f"粘贴完成 {processed_tiles}/{len(tiles)} 个切片。")
-
-        # --- Saving logic remains largely the same ---
-        if processed_tiles > 0:
-            output_filename = f"{identifier}{OUTPUT_MIDDLE_PART}{output_ext}"
-            output_filepath = output_dir / output_filename
-
-            # --- Use Rasterio for TIFF ---
-            if is_output_tiff and first_tile_profile is not None:
+            # 2a. 获取基准属性 (失败则跳过此标识符)
+            tile_width, tile_height, channels, dtype, pillow_mode, profile = get_required_tile_properties(first_tile_info['path'], is_tiff)
+            # 2b. 计算网格和画布尺寸
+            max_row = max(t['row'] for t in tiles)
+            max_col = max(t['col'] for t in tiles)
+            grid_rows, grid_cols = max_row + 1, max_col + 1
+            total_height = grid_rows * tile_height
+            total_width = grid_cols * tile_width
+            print(f"  网格: {grid_rows}x{grid_cols}, 总尺寸: {total_width}x{total_height}")
+            # 2c. 创建画布
+            canvas_shape = (total_height, total_width, channels) if channels > 1 else (total_height, total_width)
+            if total_height <= 0 or total_width <= 0: raise ValueError("画布尺寸无效")
+            canvas = np.zeros(canvas_shape, dtype=dtype)
+            print(f"  已创建画布, 形状: {canvas.shape}, 类型: {canvas.dtype}")
+            # 2d. 粘贴切片
+            print("  正在粘贴切片 (确保后续文件属性一致)")
+            processed_count = 0
+            for tile_info in tiles:
+                tile_path = tile_info['path']
                 try:
-                    print(f"正在准备使用 Rasterio 保存 TIFF: {output_filepath}")
-                    stitched_profile = first_tile_profile.copy()
-                    # Use calculated total_height and total_width which respect max_rows
-                    stitched_profile['height'] = total_height
-                    stitched_profile['width'] = total_width
-                    stitched_profile['count'] = channels
-                    stitched_profile['dtype'] = determined_dtype
-
-                    # Find the tile corresponding to x=0, y=0 (if it exists in the filtered set)
-                    # This gives a more accurate starting transform.
-                    origin_tile_path = None
-                    origin_transform = None
-                    for t in tiles:
-                        if t['x'] == 0 and t['y'] == 0:
-                             origin_tile_path = t['path']
-                             break
-
-                    if origin_tile_path:
-                         try:
-                             with rasterio.open(origin_tile_path) as origin_src:
-                                 origin_transform = origin_src.transform
-                                 print(f"使用切片 '{origin_tile_path.name}' (x=0, y=0) 的 Transform。")
-                         except Exception as origin_e:
-                             print(f"警告: 无法读取 x=0, y=0 切片 '{origin_tile_path.name}' 的 Transform: {origin_e}。将使用第一个切片的 Transform。")
-                             origin_transform = first_tile_profile.get('transform') # Fallback to first tile's
+                    tile_array = None
+                    if is_tiff:
+                        with rasterio.open(tile_path) as src:
+                            if src.width != tile_width or src.height != tile_height:
+                                print(f"  警告: 切片 {tile_path.name} 尺寸与基准不符! 跳过。")
+                                continue
+                            data = src.read()
+                            tile_array = data.transpose(1, 2, 0) if channels > 1 else data[0]
                     else:
-                         print(f"警告: 在 (过滤后的) 切片中未找到 x=0, y=0 的切片。将使用第一个切片的 Transform 作为地理参考起点。")
-                         origin_transform = first_tile_profile.get('transform') # Fallback to first tile's
-
-
-                    if origin_transform:
-                         stitched_profile['transform'] = origin_transform
-                    else:
-                         # If no transform anywhere, remove it to avoid errors
-                         stitched_profile.pop('transform', None)
-                         stitched_profile.pop('crs', None) # Also remove CRS if transform is missing
-                         print("警告: 未能找到有效的地理参考信息 (Transform)，输出 TIFF 将不包含地理参考。")
-
-
-                    stitched_profile['driver'] = 'GTiff'
-                    # Sensible compression defaults
-                    if 'compress' not in stitched_profile or stitched_profile['compress'] is None:
-                           stitched_profile['compress'] = 'deflate'
-                    if 'tiled' not in stitched_profile or not stitched_profile['tiled']:
-                           stitched_profile['tiled'] = True
-                           stitched_profile['blockxsize'] = 256 if tile_width >= 256 else tile_width
-                           stitched_profile['blockysize'] = 256 if tile_height >= 256 else tile_height
-                           # Ensure block sizes are powers of 2 or multiples of 16 if possible for better compatibility
-                           # This is simplified, a more robust check might be needed
-
-                    # Remove keys that might cause issues if copied directly and not updated
-                    stitched_profile.pop('nodata', None) # Nodata might vary, safer to remove unless specifically handled
-
-                    with rasterio.open(output_filepath, 'w', **stitched_profile) as dest:
-                        if channels == 1:
-                            print(f"写入单波段数据...")
-                            dest.write(canvas, 1)
-                        elif channels > 1:
-                            print(f"转换数据到 (C, H, W) 顺序并写入 {channels} 波段...")
-                            data_to_write = canvas.transpose(2, 0, 1)
-                            dest.write(data_to_write)
-                        print(f"Rasterio 保存 TIFF 成功!")
-
-                except Exception as e:
-                    print(f"错误: 使用 Rasterio 保存 TIFF 文件 '{output_filepath}' 失败: {e}")
-                    print(f"尝试回退到 Pillow 保存 (无地理信息)...")
-                    # --- Fallback to Pillow for TIFF ---
-                    try:
-                        # Attempt to determine fallback pillow mode if not already set
-                        if pillow_mode is None:
-                            if channels==1: pillow_mode = 'L' if determined_dtype == np.uint8 else ('I;16' if determined_dtype==np.uint16 else ('I' if determined_dtype==np.int32 else ('F' if determined_dtype==np.float32 else None)))
-                            elif channels==3: pillow_mode = 'RGB'
-                            elif channels==4: pillow_mode = 'RGBA'
-                            else: pillow_mode = None # Cannot determine fallback
-
-                        if pillow_mode:
-                            stitched_image = Image.fromarray(canvas, mode=pillow_mode)
-                            stitched_image.save(output_filepath, format='TIFF', compression='tiff_deflate') # Use Pillow's deflate
-                            print(f"Pillow 回退保存 TIFF 成功 (无地理信息)。")
-                        else:
-                            print(f"无法确定回退的 Pillow 模式，保存失败。")
-                    except Exception as pillow_e:
-                        print(f"错误: Pillow 回退保存 TIFF 也失败: {pillow_e}")
-
-            # --- Use Pillow for other formats ---
-            elif not is_output_tiff:
-                 try:
-                    print(f"正在使用 Pillow 保存 {output_format_string}: {output_filepath}")
-                    if pillow_mode is None:
-                        print(f"错误: 无法确定 Pillow 模式来保存非 TIFF 文件 '{output_filepath}'。")
-                        continue # Skip saving this file
-
-                    # Ensure canvas dtype is compatible with Pillow mode before creating image
-                    # This is a basic check, more sophisticated checks might be needed
-                    pillow_compatible = False
-                    if pillow_mode == 'L' and canvas.dtype == np.uint8: pillow_compatible = True
-                    elif pillow_mode == 'RGB' and canvas.dtype == np.uint8: pillow_compatible = True
-                    elif pillow_mode == 'RGBA' and canvas.dtype == np.uint8: pillow_compatible = True
-                    elif pillow_mode == 'I;16' and canvas.dtype == np.uint16: pillow_compatible = True # Pillow supports uint16 via I;16
-                    elif pillow_mode == 'I' and canvas.dtype == np.int32: pillow_compatible = True
-                    elif pillow_mode == 'F' and canvas.dtype == np.float32: pillow_compatible = True
-                    # Add other modes/dtypes if necessary
-
-                    if not pillow_compatible:
-                         print(f"错误: NumPy 数组类型 ({canvas.dtype}) 与确定的 Pillow 模式 '{pillow_mode}' 不兼容。无法使用 Pillow 保存 '{output_filepath}'。")
+                        with Image.open(tile_path) as img:
+                            if img.width != tile_width or img.height != tile_height:
+                                print(f"  警告: 切片 {tile_path.name} 尺寸与基准不符! 跳过。")
+                                continue
+                            img_to_process = img
+                            if img.mode != pillow_mode:
+                                try:
+                                    img_to_process = img.convert(pillow_mode)
+                                except Exception:
+                                     print(f"  警告: 尝试转换切片 {tile_path.name} 到模式 {pillow_mode} 失败。跳过。")
+                                     continue
+                            tile_array = np.array(img_to_process)
+                    x_pos = tile_info['col'] * tile_width
+                    y_pos = tile_info['row'] * tile_height
+                    if y_pos + tile_height > total_height or x_pos + tile_width > total_width:
+                         print(f"  警告: 计算出的切片 {tile_path.name} 位置超出画布边界。跳过。")
                          continue
 
+                    if channels > 1:
+                        canvas[y_pos : y_pos + tile_height, x_pos : x_pos + tile_width, :] = tile_array
+                    else:
+                        canvas[y_pos : y_pos + tile_height, x_pos : x_pos + tile_width] = tile_array
+                    processed_count += 1
 
-                    stitched_image = Image.fromarray(canvas, mode=pillow_mode)
+                except (FileNotFoundError, rasterio.RasterioIOError, Image.UnidentifiedImageError, Exception) as e:
+                    print(f"错误: 处理切片 '{tile_path}' 时出错: {e}。跳过此切片。", file=sys.stderr)
 
-                    save_options = {}
-                    img_to_save = stitched_image # Potentially converted image
+            print(f"  完成粘贴尝试，共处理 {processed_count} / {len(tiles)} 个切片。")
 
-                    if output_format_string == 'JPEG':
-                        save_options['quality'] = 95
-                        # JPEG doesn't support alpha or other complex modes well
-                        if img_to_save.mode not in ['L', 'RGB']:
-                            print(f"   注意: 将图像从模式 {img_to_save.mode} 转换为 RGB 以保存为 JPEG。")
-                            try:
-                                img_to_save = img_to_save.convert('RGB')
-                            except Exception as conv_e:
-                                print(f"   错误: 转换为 RGB 失败: {conv_e}。无法保存为 JPEG。")
-                                continue # Skip saving
-                    elif output_format_string == 'PNG':
-                        save_options['compress_level'] = 6 # 0 (no compression) to 9 (max)
+            # 2e. 保存结果 (如果至少粘贴了一个)
+            if processed_count > 0:
+                 # 获取原点(0,0)的地理参考信息 (仍然需要)
+                 origin_transform, origin_crs = None, profile.get('crs') if profile else None
+                 for t in tiles:
+                     if t['row'] == 0 and t['col'] == 0:
+                         try:
+                             with rasterio.open(t['path']) as origin_src:
+                                 if origin_src.width == tile_width and origin_src.height == tile_height:
+                                     origin_transform = origin_src.transform
+                                     origin_crs = origin_src.crs
+                         except Exception: pass
+                         break
 
-                    img_to_save.save(output_filepath, format=output_format_string, **save_options)
-                    print(f"Pillow 保存 {output_format_string} 成功!")
-                 except Exception as e:
-                    print(f"错误: 使用 Pillow 保存 '{output_filepath}' 时失败: {e}")
+                 output_filename = f"{identifier}{OUTPUT_MIDDLE_PART}{output_ext}"
+                 output_filepath = output_dir / output_filename
+                 save_stitched_image(canvas, output_filepath, is_tiff, profile, pillow_mode,
+                                     total_height, total_width, channels, dtype,
+                                     origin_transform, origin_crs)
+            else:
+                print("  没有成功处理任何切片，不保存此标识符的结果。")
 
-            # This case means it was TIFF but profile reading failed earlier
-            elif is_output_tiff and first_tile_profile is None:
-                 print(f"错误: 尝试保存 TIFF，但未能从第一个切片获取 Profile 信息，且 Pillow 模式也未能确定。无法保存 '{output_filepath}'。")
-
-        else:
-            print(f"没有成功处理任何切片，无法为标识符 '{identifier}' 生成拼接图像。")
-
+        except (RuntimeError, MemoryError, ValueError, TypeError) as e:
+             print(f"错误: 处理标识符 '{identifier}' 失败 ({e})。跳过。", file=sys.stderr)
+             continue
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="拼接遵循 'name_xN_yM.ext' 命名规则的图像切片。"
-                    "优先使用 Rasterio 处理和保存 TIFF 以尝试保留地理信息。"
-                    "对于其他格式 (JPG, PNG)，使用 Pillow。",
+        description=(
+            "拼接遵循 '名称_x行号_y列号.扩展名' 规则的图像切片 (简化版)。\n"
+            "**重要:** 假设同一标识符下的所有切片属性完全一致。\n"
+            "行号(x)从0开始，列号(y)从0开始。"
+        ),
         formatter_class=argparse.RawTextHelpFormatter
-        )
-    parser.add_argument("input_dir", help="包含图像切片的文件夹路径。")
-    parser.add_argument("output_dir", help="保存拼接后图像的文件夹路径。")
+    )
+    parser.add_argument("input_dir", type=str, help="包含图像切片的文件夹路径。")
+    parser.add_argument("output_dir", type=str, help="保存拼接后图像的文件夹路径。")
     args = parser.parse_args()
-    input_path = Path(args.input_dir)
-    output_path = Path(args.output_dir)
+
+    input_path = Path(args.input_dir).resolve()
+    output_path = Path(args.output_dir).resolve()
+
+    if not input_path.is_dir():
+         print(f"错误: 输入路径 '{input_path}' 无效。", file=sys.stderr)
+         sys.exit(1)
+
+    print(f"输入文件夹: {input_path}")
+    print(f"输出文件夹: {output_path}")
+    print("--- 开始处理 (简化模式) ---")
+    print("**注意: 脚本假设同一标识符下的切片属性一致，仅验证第一个切片。**")
+
     stitch_images(input_path, output_path)
 
     print("\n脚本执行完毕。")
