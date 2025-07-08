@@ -1,113 +1,145 @@
-import os
 import typer
 import rasterio
 from rasterio.windows import Window
-from math import ceil
+from PIL import Image
 from tqdm import tqdm
 from pathlib import Path
+import traceback
+
+Image.MAX_IMAGE_PIXELS = None
 RASTERIO_COMPRESSION = None
-app = typer.Typer()
+
+app = typer.Typer(help="一个为机器学习优化的图像切片工具。所有输出均为无压缩TIFF。")
 
 @app.command()
 def crop_image(
-    img_path: Path = typer.Option(
-        ..., '-i', '--img-path',
-        help="输入影像的路径 (TIFF/GeoTIFF).",
-        exists=True,
-        file_okay=True,
-        dir_okay=False,
-        readable=True,
-        resolve_path=True,
-    ),
-    output_dir: Path = typer.Option(
-        ..., '-o', '--output-dir',
-        help="输出裁剪图像的文件夹路径.",
-        file_okay=False,
-        dir_okay=True,
-        writable=True,
-        resolve_path=True,
-    ),
-    tile_size: int = typer.Option(
-        768, '--tile-size',
-        help="裁剪块的边长 (像素), 默认为 768."
-    ),
+        img_path: Path = typer.Option(
+            ..., '-i', '--img-path',
+            help="输入影像的路径 (支持 .tif, .tiff, .png, .jpg, .jpeg)。",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            resolve_path=True,
+        ),
+        output_dir: Path = typer.Option(
+            ..., '-o', '--output-dir',
+            help="输出裁剪图像的文件夹路径。",
+            file_okay=False,
+            dir_okay=True,
+            writable=True,
+            resolve_path=True,
+        ),
+        tile_size: int = typer.Option(
+            768, '--tile-size',
+            help="裁剪块的方形边长 (像素), 默认为 768。"
+        ),
 ):
-
+    """
+    将大图像（TIFF, PNG, JPG）切割成指定大小的方形瓦片。
+    所有输出瓦片都将保存为无压缩的TIFF格式，以优化机器学习流程。
+    """
     try:
-        print(f"正在使用 Rasterio 打开图像: {img_path}")
-        with rasterio.open(img_path) as src:
-            width = src.width
-            height = src.height
-            profile = src.profile
-            print(f"图像尺寸: {width} x {height}")
-            print(f"目标瓦片尺寸: {tile_size} x {tile_size}")
-            if width < tile_size or height < tile_size:
-                 print(f"错误：图像尺寸 ({width}x{height}) 小于目标瓦片尺寸 ({tile_size}x{tile_size})。无法生成完整瓦片。")
-                 raise typer.Exit(code=1)
-            if tile_size <= 0:
-                 print("错误：瓦片大小必须是正整数。")
-                 raise typer.Exit(code=1)
-            num_full_tiles_x = width // tile_size
-            num_full_tiles_y = height // tile_size
-            total_tiles_to_process = num_full_tiles_x * num_full_tiles_y
+        file_suffix = img_path.suffix.lower()
+        is_geospatial = file_suffix in ['.tif', '.tiff']
+        is_standard_image = file_suffix in ['.png', '.jpg', '.jpeg']
 
-            if total_tiles_to_process == 0:
-                print("错误：根据计算，无法生成任何完整瓦片。")
-                raise typer.Exit(code=1)
+        width, height = 0, 0
+        src = None
+        img = None
 
-            print(f"将只生成 {num_full_tiles_x} x {num_full_tiles_y} = {total_tiles_to_process} 个完整瓦片")
-            ignored_width = width % tile_size
-            ignored_height = height % tile_size
-            if ignored_width > 0 or ignored_height > 0:
-                print(f"注意：图像右侧 {ignored_width} 像素和底部 {ignored_height} 像素将被忽略。")
-            output_dir.mkdir(parents=True, exist_ok=True)
-            print(f"瓦片将保存在: {output_dir}")
-            base_filename = img_path.stem
-            with tqdm(total=total_tiles_to_process, desc="正在切割完整瓦片", unit="tile") as pbar:
-                for j in range(num_full_tiles_y):
-                    for i in range(num_full_tiles_x):
-                        col_off = i * tile_size
-                        row_off = j * tile_size
-                        window = Window(col_off, row_off, tile_size, tile_size)
+        if is_geospatial:
+            print(f"正在使用 Rasterio 打开地理空间图像: {img_path}")
+            src = rasterio.open(img_path)
+            width, height = src.width, src.height
+        elif is_standard_image:
+            print(f"正在使用 Pillow 打开标准图像: {img_path}")
+            img = Image.open(img_path)
+            width, height = img.size
+        else:
+            print(f"错误：不支持的文件格式 '{file_suffix}'。请输入 .tif, .png, 或 .jpg 文件。")
+            raise typer.Exit(code=1)
 
-                        try:
+        print(f"图像尺寸: {width} x {height}")
+        print(f"目标瓦片尺寸: {tile_size} x {tile_size}")
+
+        if tile_size <= 0:
+            print("错误：瓦片大小必须是正整数。")
+            raise typer.Exit(code=1)
+        if width < tile_size or height < tile_size:
+            print(f"错误：图像尺寸 ({width}x{height}) 小于目标瓦片尺寸 ({tile_size}x{tile_size})。无法生成完整瓦片。")
+            raise typer.Exit(code=1)
+
+        num_full_tiles_x = width // tile_size
+        num_full_tiles_y = height // tile_size
+        total_tiles_to_process = num_full_tiles_x * num_full_tiles_y
+
+        if total_tiles_to_process == 0:
+            print("错误：根据计算，无法生成任何完整瓦片。请检查瓦片尺寸设置。")
+            raise typer.Exit(code=1)
+
+        print(f"将生成 {num_full_tiles_x} x {num_full_tiles_y} = {total_tiles_to_process} 个无压缩TIFF瓦片")
+        ignored_width = width % tile_size
+        ignored_height = height % tile_size
+        if ignored_width > 0 or ignored_height > 0:
+            print(f"注意：图像右侧 {ignored_width} 像素和底部 {ignored_height} 像素将被忽略。")
+
+        output_dir.mkdir(parents=True, exist_ok=True)
+        print(f"瓦片将保存在: {output_dir}")
+        base_filename = img_path.stem
+
+        with tqdm(total=total_tiles_to_process, desc="正在切割无压缩瓦片", unit="tile") as pbar:
+            for j in range(num_full_tiles_y):
+                for i in range(num_full_tiles_x):
+                    try:
+                        output_filename = f"{base_filename}_tile_x{i}_y{j}.tif"
+
+                        if is_geospatial:
+                            col_off, row_off = i * tile_size, j * tile_size
+                            window = Window(col_off, row_off, tile_size, tile_size)
                             data = src.read(window=window)
-                            out_profile = profile.copy()
-                            out_transform = src.window_transform(window)
 
-                            out_profile.update({
+                            profile = src.profile.copy()
+                            transform = src.window_transform(window)
+                            profile.update({
                                 'height': tile_size,
                                 'width': tile_size,
-                                'transform': out_transform,
+                                'transform': transform,
                                 'compress': RASTERIO_COMPRESSION,
                                 'driver': 'GTiff',
                                 'tiled': True,
-                                'blockxsize': 256,
-                                'blockysize': 256
+                                'blockxsize': min(256, tile_size),
+                                'blockysize': min(256, tile_size),
                             })
-
-                            output_filename = f"{base_filename}_tile_x{i}_y{j}.tif"
-                            output_path = output_dir / output_filename
-
-                            with rasterio.open(output_path, 'w', **out_profile) as dest:
+                            with rasterio.open(output_dir / output_filename, 'w', **profile) as dest:
                                 dest.write(data)
 
-                        except Exception as tile_err:
-                            print(f"\n处理瓦片 (x={i}, y={j}) 时出错: {tile_err}")
+                        elif is_standard_image:
+                            left, upper = i * tile_size, j * tile_size
+                            right, lower = left + tile_size, upper + tile_size
+                            box = (left, upper, right, lower)
 
-                        pbar.update(1)
+                            cropped_img = img.crop(box)
+                            cropped_img.save(output_dir / output_filename, 'TIFF', compression='none')
 
-        print("\n所有完整瓦片处理完成!")
+                    except Exception as tile_err:
+                        print(f"\n处理瓦片 (x={i}, y={j}) 时出错: {tile_err}")
 
-    except rasterio.RasterioIOError as rio_err:
-        print(f"错误: Rasterio无法读取文件 {img_path}. 文件可能损坏或格式不受支持.")
-        print(f"Rasterio 错误信息: {rio_err}")
-        raise typer.Exit(code=1)
-    except FileNotFoundError:
-        print(f"错误: 输入文件未找到 {img_path}")
-        raise typer.Exit(code=1)
+                    pbar.update(1)
+
+        print("\n所有无压缩瓦片处理完成!")
+        print(f"请注意: 由于没有压缩，输出文件会占用较多磁盘空间。")
+
     except Exception as e:
-        print(f"处理图像时发生意外错误: {e}")
-        import traceback
+        print(f"\n处理过程中发生意外错误: {e}")
         traceback.print_exc()
         raise typer.Exit(code=1)
+    finally:
+        if src:
+            src.close()
+        if img:
+            img.close()
+
+
+if __name__ == "__main__":
+    app()
