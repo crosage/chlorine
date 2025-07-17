@@ -7,7 +7,6 @@ from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor  # 导入线程池执行器
 import sys
 
-
 def process_image(args):
 
     filename, input_dir, palette, overwrite = args
@@ -77,7 +76,6 @@ def convert_palette_to_grayscale(
         raise typer.Exit()
 
     typer.echo(f"找到 {len(image_files)} 个图像文件。将使用 {workers} 个线程开始并行转换...")
-
 
     tasks = [(filename, input_dir, palette, overwrite) for filename in image_files]
 

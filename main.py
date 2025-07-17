@@ -1,12 +1,14 @@
 import typer
 import os
 
-import convert_to_grey
+import grey_to_png
+import png_to_grey
 from convert_crs import convert_crs
 from convert_to_uint16 import convert_to_uint16
+from counter import analyze_colors
 from crop_image import crop_image
 from crop_xy import crop_file
-from crop import shapefile_to_bw_label
+from crop_with_shp import shapefile_to_bw_label
 from dehazer import run_dehazing
 from generater import generate_dummy_ground_truth
 from img_to_tif import convert_img_to_tiff
@@ -16,15 +18,13 @@ from sample_area_getter import extract_polygon
 from masker import apply_mask
 from auto_sample_area import create_concave_hull_polygon
 from set_fourth_channel import set_fourth_channel_to_one
-from split_image import split_images
 
 app = typer.Typer()
 
-os.environ['PROJ_LIB'] = r'D:\code\shpdealer\venv\Lib\site-packages\pyproj\proj_dir\share\proj'
-
 app.command(name="apply-mask", help="将感兴趣区域(AOI)外的图像部分置为0")(apply_mask)
 app.command(name="convert-to-uint16",help="将tiff图片转化为uint16位")(convert_to_uint16)
-app.command(name="convert-to-grey",help="将png转化为灰度图")(convert_to_grey.convert_to_grayscale)
+app.command(name="png-to-grey",help="根据调色板将png转化为灰度图")(png_to_grey.convert_palette_to_grayscale)
+app.command(name="grey-to-png",help="将灰度图根据调色板转化为png")(grey_to_png.convert_grayscale_to_palette)
 app.command(name="combine-polygons", help="将给定的Shapefile中的所有标注区域合并为一个大的样本区，并根据坐标限制范围")(create_concave_hull_polygon)
 app.command(name="convert-crs", help="切换参考系")(convert_crs)
 app.command(name="crop-by-coordinates", help="给出上下左右坐标进行裁剪")(crop_file)
@@ -33,11 +33,11 @@ app.command(name="extract-polygon-coordinates", help="从 Shapefile 中提取多
 app.command(name="img-to-tiff", help="将img图像转化为tif图像")(convert_img_to_tiff)
 app.command(name="image-info", help="根据文件路径自动判断文件类型（影像、图片或 Shapefile）并获取基本信息")(process_file)
 app.command(name="resize-image", help="压缩图片大小")(resize)
-app.command(name="split-image", help="切割图片")(split_images)
 app.command(name="set-fourth-channel", help="设置第四个通道")(set_fourth_channel_to_one)
 app.command(name="generate-ground-truth",help="生成不存在的真值图")(generate_dummy_ground_truth)
 app.command(name="crop-image",help="分割图片")(crop_image)
 app.command(name="dehazer",help="去雾")(run_dehazing)
+app.command(name="rgb-counter",help="某个文件夹下所有图片rgb统计")(analyze_colors)
 
 if __name__ == "__main__":
     app()
