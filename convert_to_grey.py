@@ -4,6 +4,41 @@ import typer
 import numpy as np
 from PIL import Image
 from tqdm import tqdm
+from concurrent.futures import ThreadPoolExecutor  # 导入线程池执行器
+import sys
+
+
+def process_image(args):
+
+    filename, input_dir, palette, overwrite = args
+    file_path = os.path.join(input_dir, filename)
+
+    try:
+        image = Image.open(file_path).convert("RGB")
+        image_np = np.array(image)
+        height, width, _ = image_np.shape
+
+        gray_image_np = np.zeros((height, width), dtype=np.uint8)
+
+        for class_index, color in enumerate(palette):
+            mask = np.all(image_np == np.array(color), axis=-1)
+            gray_image_np[mask] = class_index
+
+        gray_image = Image.fromarray(gray_image_np, mode='L')
+
+        if overwrite:
+            output_path = file_path
+            gray_image.save(output_path)
+        else:
+            base, ext = os.path.splitext(filename)
+            new_filename = f"{base}_gray.png"
+            output_path = os.path.join(input_dir, new_filename)
+            gray_image.save(output_path)
+        return True
+
+    except Exception as e:
+        tqdm.write(f"\n处理文件 {filename} 时出错: {e}", file=sys.stderr)
+        return False
 
 
 def convert_palette_to_grayscale(
@@ -16,11 +51,14 @@ def convert_palette_to_grayscale(
             help="定义颜色到类别索引映射的JSON文件路径。"
         ),
         overwrite: bool = typer.Option(
-            False, '--overwrite',  # 将默认值改为False，防止意外覆盖
+            False, '--overwrite',
             help="是否覆盖原文件。如果为False，则会创建带'gray_'前缀的新文件。"
+        ),
+        workers: int = typer.Option(
+            os.cpu_count(), '-w', '--workers',  # 新增参数，用于控制线程数
+            help="用于并行处理的工作线程数量，默认为CPU核心数。"
         )
 ):
-
     try:
         with open(palette_path, 'r') as f:
             palette = json.load(f)
@@ -38,43 +76,17 @@ def convert_palette_to_grayscale(
         typer.secho(f"在目录 '{input_dir}' 中未找到支持的图像文件。", fg=typer.colors.YELLOW)
         raise typer.Exit()
 
-    typer.echo(f"找到 {len(image_files)} 个图像文件。开始转换...")
+    typer.echo(f"找到 {len(image_files)} 个图像文件。将使用 {workers} 个线程开始并行转换...")
 
-    for filename in tqdm(image_files, desc="转换进度"):
-        file_path = os.path.join(input_dir, filename)
 
-        try:
+    tasks = [(filename, input_dir, palette, overwrite) for filename in image_files]
 
-            image = Image.open(file_path).convert("RGB")
-            image_np = np.array(image)
-            height, width, _ = image_np.shape
+    with ThreadPoolExecutor(max_workers=workers) as executor:
 
-            gray_image_np = np.zeros((height, width), dtype=np.uint8)
+        results = list(tqdm(executor.map(process_image, tasks), total=len(tasks), desc="转换进度"))
 
-            for class_index, color in enumerate(palette):
-                mask = np.all(image_np == np.array(color), axis=-1)
-                gray_image_np[mask] = class_index
-
-            gray_image = Image.fromarray(gray_image_np, mode='L')
-
-            if overwrite:
-                # 覆盖原文件
-                # 注意：这会将彩色图像替换为灰度图，请谨慎使用
-                output_path = file_path
-                gray_image.save(output_path)
-                typer.echo(f"已覆盖: {output_path}") # 在tqdm进度条中，可以省略单行输出
-            else:
-                # 创建新文件
-                base, ext = os.path.splitext(filename)
-                new_filename = f"{base}_gray.png"
-                output_path = os.path.join(input_dir, new_filename)
-                gray_image.save(output_path)
-                typer.echo(f"已另存为: {output_path}")
-
-        except Exception as e:
-            typer.secho(f"\n处理文件 {filename} 时出错: {e}", fg=typer.colors.RED, err=True)
-
-    typer.secho("\n转换完成！", fg=typer.colors.BRIGHT_GREEN)
+    success_count = sum(1 for r in results if r)
+    typer.secho(f"\n转换完成！成功处理 {success_count}/{len(image_files)} 个文件。", fg=typer.colors.BRIGHT_GREEN)
 
 
 if __name__ == "__main__":
