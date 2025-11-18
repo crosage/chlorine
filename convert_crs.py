@@ -1,3 +1,19 @@
+"""
+坐标参考系(CRS)转换工具
+
+功能: 将栅格(.tif/.img/.ige)和矢量(.shp)文件转换到指定坐标系
+
+参数:
+  -i, --img-path    输入栅格文件路径
+  -s, --shp-path    输入矢量文件路径
+  -o, --output-dir  输出文件夹(必需)
+  --dst-crs         目标CRS,如 'EPSG:32649'(必需)
+  --basename        输出文件基础名(可选)
+
+输出: {basename}_converted.tif / {basename}_converted.shp
+
+"""
+
 import rasterio
 from rasterio.warp import calculate_default_transform, reproject, Resampling
 import fiona

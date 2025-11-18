@@ -1,3 +1,16 @@
+"""
+标注区域合并工具
+
+功能: 将Shapefile中的所有标注区域合并为一个大的样本区(凹壳多边形),可选坐标范围限制
+
+参数:
+  -s, --shapefile-path        输入Shapefile路径(必需)
+  -o, --output-shapefile-path 输出Shapefile路径(必需)
+  --left, --right             限制范围的X坐标(可选)
+  --top, --bottom             限制范围的Y坐标(可选)
+
+输出: 合并后的单个样本区多边形
+"""
 import typer
 import geopandas as gpd
 from shapely.geometry import MultiPoint, box

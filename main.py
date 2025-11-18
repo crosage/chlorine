@@ -13,7 +13,7 @@ from dehazer import run_dehazing
 from generater import generate_dummy_ground_truth
 from img_to_tif import convert_img_to_tiff
 from resizer import resize
-from imggetter import process_file
+from imggetter import extract_info
 from sample_area_getter import extract_polygon
 from masker import apply_mask
 from auto_sample_area import create_concave_hull_polygon
@@ -31,7 +31,7 @@ app.command(name="crop-by-coordinates", help="给出上下左右坐标进行裁�
 app.command(name="crop-label-from-shapefile", help="根据shapefile生成黑白label图像")(shapefile_to_bw_label)
 app.command(name="extract-polygon-coordinates", help="从 Shapefile 中提取多边形坐标并保存为 NumPy 文件")(extract_polygon)
 app.command(name="img-to-tiff", help="将img图像转化为tif图像")(convert_img_to_tiff)
-app.command(name="image-info", help="根据文件路径自动判断文件类型（影像、图片或 Shapefile）并获取基本信息")(process_file)
+app.command(name="image-info", help="根据文件路径自动判断文件类型（影像、图片或 Shapefile）并获取基本信息")(extract_info)
 app.command(name="resize-image", help="压缩图片大小")(resize)
 app.command(name="set-fourth-channel", help="设置第四个通道")(set_fourth_channel_to_one)
 app.command(name="generate-ground-truth",help="生成不存在的真值图")(generate_dummy_ground_truth)
